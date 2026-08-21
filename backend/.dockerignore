@@ -1,0 +1,29 @@
+# Never bake local secrets or dev artifacts into the image — real config is
+# injected at container runtime via docker-compose `env_file`/`environment`.
+.env
+.env.*
+!.env.example
+
+venv/
+.venv/
+env/
+ENV/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+
+.vscode/
+.idea/

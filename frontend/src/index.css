@@ -1,0 +1,97 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    background-color: #0A0A0F;
+    color: #E2E2F0;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Fallback for form controls: ensure dark inputs when utilities missing */
+  input,
+  textarea,
+  select,
+  button {
+    background-color: #141420;
+    color: #E2E2F0;
+    border: 1px solid #2D2D3D;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0A0A0F;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2D2D3D;
+    border-radius: 2px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #6C63FF;
+  }
+}
+
+@layer utilities {
+  .text-primary {
+    color: #E2E2F0;
+  }
+  .text-muted {
+    color: #6B6B8A;
+  }
+  .bg-surface {
+    background-color: #141420;
+  }
+  .bg-surface-2 {
+    background-color: #1E1E2E;
+  }
+  .border-border {
+    border-color: #2D2D3D;
+  }
+  .text-accent {
+    color: #6C63FF;
+  }
+  .bg-accent {
+    background-color: #6C63FF;
+  }
+  .bg-accent-hover {
+    background-color: #5A52DD;
+  }
+  .text-error {
+    color: #EF4444;
+  }
+  .text-success {
+    color: #22C55E;
+  }
+  .text-warning {
+    color: #F59E0B;
+  }
+
+  /* Drag region for Electron overlay */
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+}

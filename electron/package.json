@@ -1,0 +1,86 @@
+{
+  "name": "interviewcopilot-ai",
+  "version": "1.0.0",
+  "description": "AI-powered Interview Practice & Live Meeting Assistant",
+  "main": "dist/main.js",
+  "author": "InterviewCopilot AI <support@interviewcopilot.ai>",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "cross-env NODE_ENV=development electron .",
+    "dev": "concurrently \"npm run build:watch\" \"wait-on dist/main.js && cross-env NODE_ENV=development electron .\"",
+    "build": "tsc -p tsconfig.json",
+    "build:watch": "tsc -p tsconfig.json --watch",
+    "build:win": "npm run build && electron-builder --win --x64",
+    "build:mac": "npm run build && electron-builder --mac",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.5",
+    "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
+    "electron": "^33.2.1",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.3.3",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "ai.interviewcopilot.app",
+    "productName": "InterviewCopilot AI",
+    "copyright": "Copyright © 2025 InterviewCopilot AI",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/dist",
+        "to": "frontend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "InterviewCopilot AI"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.productivity",
+      "darkModeSupport": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "interviewcopilot",
+        "repo": "interviewcopilot-ai"
+      }
+    ]
+  }
+}

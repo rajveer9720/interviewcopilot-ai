@@ -1,0 +1,18 @@
+# Private keys / certificates — never commit real credentials
+*.pem
+*.key
+*.p12
+*.pfx
+bucket_dev.json
+*-service-account.json
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

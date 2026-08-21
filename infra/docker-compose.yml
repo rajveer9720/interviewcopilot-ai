@@ -1,0 +1,97 @@
+services:
+  # ── Backend API ──────────────────────────────────────────────
+  # NOTE: all relative paths in this file (build contexts, bind mounts) are
+  # relative to THIS file's directory (infra/), which is how Compose resolves
+  # them by default — not relative to the repo root or the caller's cwd.
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://interviewcopilot:password@db:5432/interviewcopilot
+      REDIS_URL: redis://redis:6379
+    env_file:
+      - ../backend/.env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # ── PostgreSQL ───────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: interviewcopilot
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: interviewcopilot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U interviewcopilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  # ── Redis ────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+
+  # ── Nginx Reverse Proxy ──────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+  # ── Database Migrations ──────────────────────────────────────
+  alembic:
+    build:
+      context: ../backend
+    # cwd = /app/backend, matching alembic.ini's `prepend_sys_path = ..`
+    # (which adds /app — containing the `backend` package — to sys.path).
+    working_dir: /app/backend
+    command: alembic upgrade head
+    env_file:
+      - ../backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://interviewcopilot:password@db:5432/interviewcopilot
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+    profiles:
+      - migrate
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  app-network:
+    driver: bridge

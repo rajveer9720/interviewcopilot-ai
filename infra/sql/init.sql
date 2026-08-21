@@ -1,0 +1,7 @@
+-- Postgres init script, run once when the `db` container's data volume is first created.
+--
+-- All primary keys are generated application-side (Python `uuid.uuid4()`, see the
+-- SQLAlchemy models under backend/), so no server-side UUID-generation extension
+-- (pgcrypto / uuid-ossp) is required here. Actual schema creation is owned entirely
+-- by Alembic migrations (backend/alembic/versions/) — this file intentionally does
+-- not create any tables, to avoid a second, competing source of schema truth.
