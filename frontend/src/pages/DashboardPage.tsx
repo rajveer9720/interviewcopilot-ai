@@ -127,7 +127,7 @@ export default function DashboardPage() {
       )}
 
       {/* Recent Sessions */}
-      {data?.recent_sessions?.length > 0 && (
+      {data && data.recent_sessions.length > 0 && (
         <div className="bg-surface border border-border rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-border">
             <h2 className="text-sm font-medium text-primary">Recent Sessions</h2>

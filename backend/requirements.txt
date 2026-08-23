@@ -49,3 +49,11 @@ sentry-sdk[fastapi]==2.19.0
 # Utilities
 python-slugify==8.0.4
 pendulum==3.0.0
+
+# Testing (dev-only, but kept unpinned-by-extras in this single requirements
+# file since the project has no separate dev-requirements split yet)
+pytest==8.3.3
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+aiosqlite==0.20.0
+fakeredis==2.26.1

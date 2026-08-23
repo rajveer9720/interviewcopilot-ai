@@ -4,7 +4,7 @@ All secrets injected via Docker secrets / GitHub Actions secrets at runtime.
 """
 
 from pathlib import Path
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from typing import Literal
 
@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     SECRET_KEY: str                         # generate: openssl rand -hex 32
     FRONTEND_URL: str = "http://localhost:3000"
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     # ──────────────────────────────────────────────
     # Database
@@ -45,7 +46,7 @@ class Settings(BaseSettings):
     PUBLIC_KEY: str                         # RSA public key (PEM format)
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-    JWT_ALGORITHM: str = "RS256"
+    JWT_ALGORITHM: Literal["RS256"] = "RS256"
 
     # ──────────────────────────────────────────────
     # AI Providers
@@ -93,9 +94,7 @@ class Settings(BaseSettings):
         "app://.",       # Electron custom protocol
     ]
 
-    class Config:
-        env_file = ENV_FILE_PATH
-        case_sensitive = True
+    model_config = SettingsConfigDict(env_file=ENV_FILE_PATH, case_sensitive=True)
 
 
 @lru_cache

@@ -1,14 +1,3 @@
-"""
-WebSocket session handler.
-
-Flow:
-  1. Client connects, authenticates via ?token=<jwt>
-  2. Client streams base64-encoded PCM audio chunks
-  3. Server decodes audio → Whisper STT → transcript
-  4. Server detects questions → LLM Router → streaming AI coaching
-  5. Server sends events back over WebSocket in real-time
-"""
-
 import asyncio
 import base64
 import json
@@ -40,14 +29,23 @@ SILENCE_BYTES = int(SAMPLE_RATE * BYTES_PER_SAMPLE * 0.8)
 MAX_UTTERANCE_BYTES = int(SAMPLE_RATE * BYTES_PER_SAMPLE * 12)
 SPEECH_RMS_THRESHOLD = 450
 
+QUESTION_MARKERS = [
+    "tell me", "describe", "explain", "what", "how", "why", "when",
+    "can you", "could you", "would you", "have you", "do you",
+    "walk me through", "give me an example",
+    "difference between", "differentiate between", "distinguish between",
+    "compare and contrast", "advantages of", "disadvantages of",
+    "pros and cons of", "define ", " vs ", " versus ",
+    "kya", "kaise", "kyun", "kyu", "kab", "kaun", "kahan", "kitna", "kitne",
+    "batao", "bataiye", "samjhao", "samjhaiye",
+    "क्या", "कैसे", "क्यों", "कब", "कौन", "कहाँ", "कितना", "कितने",
+    "बताओ", "बताइए", "समझाओ", "समझाइए",
+]
+
 whisper = WhisperClient()
 llm_router = LLMRouter()
 prompt_builder = PromptBuilder()
 
-# asyncio only holds a weak reference to a task returned by create_task(), so
-# an unreferenced one (e.g. fired right before the creating coroutine returns,
-# as with session_end below) can be garbage-collected mid-execution with no
-# error or log. Keep a strong reference here until each task finishes.
 _background_tasks: set[asyncio.Task] = set()
 
 
@@ -58,13 +56,22 @@ def _spawn(coro) -> asyncio.Task:
     return task
 
 
+async def _load_plan_tier(user_id: str) -> str:
+    try:
+        async with AsyncSessionFactory() as db:
+            user = await db.scalar(select(User).where(User.id == user_id))
+            return user.plan_tier if user else "free"
+    except Exception as e:
+        logger.exception("Could not load user plan: user=%s error=%s", user_id, e)
+        return "free"
+
+
 @router.websocket("/ws/session/{session_id}")
 async def websocket_session(
     websocket: WebSocket,
     session_id: str,
     token: str = Query(...),
 ):
-    # ── Authenticate ──────────────────────────────────────────
     try:
         payload = decode_access_token(token)
         user_id = payload["sub"]
@@ -76,16 +83,9 @@ async def websocket_session(
     await websocket.accept()
     logger.info("WS connected: session=%s user=%s", session_id, user_id)
 
-    plan_tier = "free"
-    try:
-        async with AsyncSessionFactory() as db:
-            user = await db.scalar(select(User).where(User.id == user_id))
-            plan_tier = user.plan_tier if user else "free"
-    except Exception as e:
-        logger.exception("Could not load user plan: session=%s error=%s", session_id, e)
+    plan_tier = await _load_plan_tier(user_id)
     logger.info("WS user plan loaded: session=%s plan=%s", session_id, plan_tier)
 
-    # Notify client
     await _send(websocket, {
         "type": "connected",
         "session_id": session_id,
@@ -109,7 +109,6 @@ async def websocket_session(
             )
 
             if msg_type == "audio_chunk":
-                # Keep collecting one utterance until the speaker pauses.
                 pcm_bytes = base64.b64decode(message["data"])
                 audio_buffer.extend(pcm_bytes)
                 if _has_speech(pcm_bytes):
@@ -141,8 +140,6 @@ async def websocket_session(
                         len(chunk),
                         "silence" if utterance_complete else "max_duration",
                     )
-
-                    # Offload to async worker
                     _spawn(
                         _process_audio_chunk(websocket, session_id, user_id, chunk, plan_tier)
                     )
@@ -159,7 +156,6 @@ async def websocket_session(
                         websocket, session_id, user_id, bytes(audio_buffer), plan_tier
                     )
                     audio_buffer.clear()
-                # Trigger background feedback generation
                 _spawn(_generate_feedback(session_id))
                 break
 
@@ -182,17 +178,8 @@ async def _process_audio_chunk(
     audio_bytes: bytes,
     plan_tier: str,
 ):
-    """
-    1. Send to Whisper for transcription
-    2. Detect if it's a question
-    3. If question → build prompt → stream LLM response
-    """
     try:
-        # ── Step 1: Transcribe ─────────────────────────────
         logger.info("Whisper transcription started: session=%s", session_id)
-        # Left on auto-detect (no forced language): forcing "hi" made Whisper
-        # hallucinate fluent-looking Hindi garbage on silence/noise chunks
-        # instead of returning empty/low-confidence output.
         result = await whisper.transcribe(audio_bytes)
         if not result or not result.get("text", "").strip():
             logger.warning("Whisper returned no text: session=%s result=%r", session_id, result)
@@ -202,14 +189,14 @@ async def _process_audio_chunk(
         confidence = result.get("confidence", 1.0)
         is_question = _detect_question(text)
         logger.info(
-            "Whisper transcription complete: session=%s chars=%d is_question=%s confidence=%s",
+            "Whisper transcription complete: session=%s chars=%d is_question=%s confidence=%s text=%r",
             session_id,
             len(text),
             is_question,
             confidence,
+            text,
         )
 
-        # Send partial transcript to client
         await _send(websocket, {
             "type": "transcript",
             "text": text,
@@ -219,10 +206,9 @@ async def _process_audio_chunk(
             "is_question": is_question,
         })
 
-        # Save to DB
         async with AsyncSessionFactory() as db:
             svc = SessionService(db)
-            transcript = await svc.save_transcript(
+            await svc.save_transcript(
                 session_id=session_id,
                 content=text,
                 confidence=confidence,
@@ -230,7 +216,6 @@ async def _process_audio_chunk(
             )
             await db.commit()
 
-        # ── Step 2: If question detected → LLM coaching ───
         if is_question:
             logger.info("Question detected; building AI prompt: session=%s", session_id)
             await _send(websocket, {
@@ -276,40 +261,13 @@ async def _process_audio_chunk(
 
 
 def _detect_question(text: str) -> bool:
-    """
-    Heuristic question detection.
-    Matches anywhere in the text, not just at the start — a casual lead-in
-    ("Achha ye batao, ...") means the actual question word rarely opens the
-    sentence. Covers English, romanized Hindi, and Devanagari question words
-    since candidates code-switch between them mid-sentence.
-    """
     text_lower = text.lower().strip()
-    question_markers = [
-        # English
-        "tell me", "describe", "explain", "what", "how", "why", "when",
-        "can you", "could you", "would you", "have you", "do you",
-        "walk me through", "give me an example",
-        # Technical-interview phrasing that's often stated flat, without a
-        # rising question tone — Whisper then won't add a trailing "?" —
-        # but is unambiguously a question in this context ("X vs Y",
-        # "difference between X and Y", "define X").
-        "difference between", "differentiate between", "distinguish between",
-        "compare and contrast", "advantages of", "disadvantages of",
-        "pros and cons of", "define ", " vs ", " versus ",
-        # Romanized Hindi/Hinglish
-        "kya", "kaise", "kyun", "kyu", "kab", "kaun", "kahan", "kitna", "kitne",
-        "batao", "bataiye", "samjhao", "samjhaiye",
-        # Devanagari
-        "क्या", "कैसे", "क्यों", "कब", "कौन", "कहाँ", "कितना", "कितने",
-        "बताओ", "बताइए", "समझाओ", "समझाइए",
-    ]
     return text_lower.endswith("?") or any(
-        marker in text_lower for marker in question_markers
+        marker in text_lower for marker in QUESTION_MARKERS
     )
 
 
 def _has_speech(pcm_bytes: bytes) -> bool:
-    """Return whether a PCM chunk has enough energy to contain speech."""
     if len(pcm_bytes) < BYTES_PER_SAMPLE:
         return False
     samples = array("h")
@@ -321,9 +279,8 @@ def _has_speech(pcm_bytes: bytes) -> bool:
 
 
 async def _generate_feedback(session_id: str):
-    """Background task: generate post-session feedback report."""
     try:
-        await asyncio.sleep(1)   # let final transcripts flush to DB
+        await asyncio.sleep(1)
         from backend.feedback.service import FeedbackService
         async with AsyncSessionFactory() as db:
             svc = FeedbackService(db)

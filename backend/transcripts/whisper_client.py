@@ -12,6 +12,46 @@ from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Candidates using this app only ever speak English or Hindi/Hinglish (see
+# ws_handler.py's question markers). Any other detected language is Whisper
+# hallucinating on noise (fan hum, room echo) rather than real speech — it
+# defaults to random-language YouTube-caption filler when it can't make out
+# words, not just English ones.
+ALLOWED_LANGUAGES = {"en", "hi"}
+
+# The most common stock phrases Whisper hallucinates on silence/noise,
+# trained into it from YouTube captions. Matched as a whole normalized
+# utterance (not a substring) so a real sentence that happens to contain
+# "thank you" mid-sentence — e.g. "Thank you for asking, let me explain" —
+# is never touched; this only catches these phrases standing alone.
+KNOWN_HALLUCINATION_PHRASES = {
+    "you",
+    "thank you",
+    "thank you.",
+    "thanks",
+    "that's it",
+    "the end",
+    "bye",
+    "bye bye",
+    "we made it, so please",
+    "captions for this",
+    "thank you for watching",
+    "thanks for watching",
+    "please subscribe",
+    "don't forget to subscribe",
+    "like and subscribe",
+    "subscribe to my channel",
+    "see you in the next video",
+    "see you next time",
+    "captions by",
+    "subtitles by",
+}
+
+
+def _is_known_hallucination_phrase(text: str) -> bool:
+    normalized = text.strip().strip(".!?").lower()
+    return normalized in KNOWN_HALLUCINATION_PHRASES
+
 
 def _seg_get(seg, key: str, default=0.0):
     """Segment items can come back as dicts or SDK model objects depending
@@ -105,10 +145,26 @@ class WhisperClient:
                     # Convert log-prob to approximate confidence (heuristic)
                     avg_confidence = min(1.0, max(0.0, 1.0 - (sum(confs) / len(confs)) / 5))
 
+            detected_language = getattr(response, "language", None)
+
             if _is_hallucinated_silence(segments):
                 logger.info(
-                    "Whisper discarded likely hallucination on silence/noise: "
-                    "session_text=%r",
+                    "Whisper discarded likely hallucination on silence/noise: text=%r",
+                    response.text,
+                )
+                return {"text": "", "confidence": 0.0, "language": language or "auto"}
+
+            if detected_language and detected_language not in ALLOWED_LANGUAGES:
+                logger.info(
+                    "Whisper discarded unexpected-language hallucination: language=%s text=%r",
+                    detected_language,
+                    response.text,
+                )
+                return {"text": "", "confidence": 0.0, "language": language or "auto"}
+
+            if _is_known_hallucination_phrase(response.text or ""):
+                logger.info(
+                    "Whisper discarded known hallucination phrase: text=%r",
                     response.text,
                 )
                 return {"text": "", "confidence": 0.0, "language": language or "auto"}
@@ -116,7 +172,7 @@ class WhisperClient:
             result = {
                 "text": response.text,
                 "confidence": avg_confidence,
-                "language": getattr(response, "language", language),
+                "language": detected_language or language,
             }
             logger.info(
                 "Whisper API response: chars=%d language=%s",

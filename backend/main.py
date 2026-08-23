@@ -3,14 +3,21 @@ FastAPI application factory.
 Registers all routers, middleware, and startup/shutdown events.
 """
 
-from fastapi import FastAPI
+import uuid
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from backend.config import settings
 from backend.core.database import engine, Base
 from backend.core.redis import init_redis, close_redis
 from backend.core.middleware import RateLimitMiddleware, RequestLoggingMiddleware
+from backend.core.logging_config import configure_logging, get_logger
+from backend.core.exceptions import AppException
+
+logger = get_logger(__name__)
 
 from backend.auth.router import router as auth_router
 from backend.sessions.router import router as sessions_router
@@ -39,6 +46,8 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    configure_logging()
+
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
@@ -57,6 +66,30 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
+
+    # ── Centralized error handling ─────────────────
+    # Every AppException subclass (see backend/core/exceptions.py) is
+    # rendered the same way here — a stable error_code + client-safe
+    # message + request_id, never a raw exception string.
+    @app.exception_handler(AppException)
+    async def app_exception_handler(request: Request, exc: AppException):
+        request_id = str(uuid.uuid4())
+        log = logger.warning if exc.status_code < 500 else logger.error
+        log(
+            "request_failed",
+            error_code=exc.error_code,
+            status_code=exc.status_code,
+            request_id=request_id,
+            path=request.url.path,
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error_code": exc.error_code,
+                "message": exc.message,
+                "request_id": request_id,
+            },
+        )
 
     # ── REST Routers ───────────────────────────────
     PREFIX = "/api/v1"

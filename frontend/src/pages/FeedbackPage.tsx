@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { apiClient } from "../api/client";
-import { RadialBarChart, RadialBar, ResponsiveContainer, Tooltip } from "recharts";
-import { ArrowLeft, TrendingUp, MessageSquare, Code, Star, Zap } from "lucide-react";
+import { ArrowLeft, MessageSquare, Code, Star, Zap } from "lucide-react";
 
 interface Feedback {
   scores: { overall: number; communication: number; technical: number; star_method: number; confidence: number };
