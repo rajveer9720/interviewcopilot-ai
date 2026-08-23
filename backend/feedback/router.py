@@ -1,5 +1,8 @@
 """Feedback domain — FastAPI router."""
 
+import asyncio
+import logging
+
 from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -11,6 +14,7 @@ from backend.feedback.models import SessionFeedback
 from backend.feedback.service import FeedbackService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/sessions/{session_id}/feedback")
@@ -57,7 +61,12 @@ async def trigger_feedback(
 
 async def _run_feedback(session_id: str):
     from backend.core.database import AsyncSessionFactory
-    async with AsyncSessionFactory() as db:
-        svc = FeedbackService(db)
-        await svc.generate_feedback(session_id)
-        await db.commit()
+    try:
+        await asyncio.sleep(1)
+        async with AsyncSessionFactory() as db:
+            svc = FeedbackService(db)
+            await svc.generate_feedback(session_id)
+            await db.commit()
+        logger.info("Manual feedback generation complete: session=%s", session_id)
+    except Exception as e:
+        logger.exception("Manual feedback generation failed: session=%s error=%s", session_id, e)

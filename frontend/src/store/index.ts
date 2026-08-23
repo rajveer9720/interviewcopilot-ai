@@ -76,10 +76,12 @@ interface AudioSlice {
   audioLevel: number;
   selectedMicId: string | null;
   captureSystemAudio: boolean;
+  micEnabled: boolean;
   setCapturing: (v: boolean) => void;
   setAudioLevel: (v: number) => void;
   setMicId: (id: string) => void;
   setCaptureSystemAudio: (v: boolean) => void;
+  setMicEnabled: (v: boolean) => void;
 }
 
 // ── UI Slice ──────────────────────────────────────────────────
@@ -178,10 +180,12 @@ export const useStore = create<AppStore>()(
       audioLevel: 0,
       selectedMicId: null,
       captureSystemAudio: true,
+      micEnabled: true,
       setCapturing: (v) => set({ isCapturing: v }),
       setAudioLevel: (v) => set({ audioLevel: v }),
       setMicId: (id) => set({ selectedMicId: id }),
       setCaptureSystemAudio: (v) => set({ captureSystemAudio: v }),
+      setMicEnabled: (v) => set({ micEnabled: v }),
 
       // ── UI ─────────────────────────────────────────────────
       overlayVisible: false,
@@ -195,6 +199,7 @@ export const useStore = create<AppStore>()(
         user: s.user,
         accessToken: s.accessToken,
         captureSystemAudio: s.captureSystemAudio,
+        micEnabled: s.micEnabled,
       }),
     }
   )

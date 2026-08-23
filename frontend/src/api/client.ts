@@ -77,5 +77,7 @@ export function createSessionWebSocket(
   token: string,
 ): WebSocket {
   const wsBase = BASE_URL.replace("http", "ws").replace("/api/v1", "");
-  return new WebSocket(`${wsBase}/ws/session/${sessionId}?token=${token}`);
+  const url = `${wsBase}/ws/session/${sessionId}?token=${token}`;
+  console.info("[InterviewCopilot][WS] connecting", { sessionId, wsBase });
+  return new WebSocket(url);
 }

@@ -31,7 +31,7 @@ function AppContent() {
   const isOverlay = pathname === "/overlay";
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-screen overflow-hidden">
       {!isOverlay && <WindowTitleBar />}
       <div className="flex-1 min-h-0">
         <Routes>

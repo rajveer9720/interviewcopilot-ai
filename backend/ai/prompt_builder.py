@@ -3,7 +3,7 @@ Context-aware prompt builder.
 Enriches LLM prompts with resume context and question classification.
 """
 
-from backend.core.redis import redis_client
+from backend.core.redis import get_redis
 from backend.core.database import AsyncSessionFactory
 from backend.resume.context_engine import ResumeContextEngine
 import logging
@@ -81,6 +81,7 @@ class PromptBuilder:
         return "general"
 
     async def _get_resume_context(self, user_id: str, question_type: str) -> str | None:
+        redis_client = get_redis()
         cache_key = f"resume_context:{user_id}:{question_type}"
         cached = await redis_client.get(cache_key)
         if cached:

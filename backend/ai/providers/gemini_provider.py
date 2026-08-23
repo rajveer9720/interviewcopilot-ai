@@ -22,8 +22,11 @@ class GeminiProvider(LLMProvider):
         self,
         prompt: str,
         stream: bool = True,
-        max_tokens: int = 500,
+        max_tokens: int = 2000,
     ) -> str | AsyncGenerator[str, None]:
+        # Gemini's "thinking" tokens are deducted from max_output_tokens too, so
+        # a budget sized for the visible answer alone (e.g. 500) can be fully
+        # consumed by reasoning before any output text is produced.
         generation_config = genai.GenerationConfig(max_output_tokens=max_tokens, temperature=0.7)
 
         if stream:

@@ -7,6 +7,7 @@ import {
   Tray,
   Menu,
   nativeImage,
+  globalShortcut,
 } from "electron";
 import * as path from "path";
 import Store from "electron-store";
@@ -43,6 +44,7 @@ app.whenReady().then(async () => {
   mainWindow = createMainWindow();
   setupTray();
   registerIpcHandlers();
+  registerGlobalShortcuts();
   startMeetingDetection();
 
   app.on("activate", () => {
@@ -61,7 +63,24 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   meetingDetectionInterval && clearInterval(meetingDetectionInterval);
+  globalShortcut.unregisterAll();
 });
+
+// ─── Global shortcuts (work while a meeting app has focus) ───────────────────
+function registerGlobalShortcuts() {
+  // Toggle the control panel without touching the taskbar/tray — both are
+  // still visible in a full-screen share, this isn't.
+  globalShortcut.register("CommandOrControl+Shift+H", () => {
+    if (!mainWindow) return;
+    mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show();
+  });
+
+  // Toggle the answer overlay independently of the control panel.
+  globalShortcut.register("CommandOrControl+Shift+O", () => {
+    const overlay = getOverlayWindow();
+    overlay ? overlay.close() : createOverlayWindow();
+  });
+}
 
 // ─── System tray ─────────────────────────────────────────────────────────────
 function setupTray() {

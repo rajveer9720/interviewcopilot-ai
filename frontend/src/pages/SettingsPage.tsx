@@ -19,7 +19,7 @@ function getErrorMessage(err: any, fallback: string): string {
 }
 
 export default function SettingsPage() {
-  const { user, captureSystemAudio, setCaptureSystemAudio } = useStore();
+  const { user, captureSystemAudio, setCaptureSystemAudio, micEnabled, setMicEnabled } = useStore();
 
   const [resumes, setResumes] = useState<ResumeEntry[]>([]);
   const [resumesLoading, setResumesLoading] = useState(true);
@@ -185,6 +185,20 @@ export default function SettingsPage() {
               className="sr-only peer"
               checked={captureSystemAudio}
               onChange={(e) => setCaptureSystemAudio(e.target.checked)}
+            />
+            <div className="w-9 h-5 bg-border peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent" />
+          </label>
+        </SettingRow>
+        <SettingRow
+          label="Listen to My Microphone"
+          description="Turn off for practice mode — only system audio (the interviewer's voice) is transcribed, your own voice is ignored"
+        >
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              className="sr-only peer"
+              checked={micEnabled}
+              onChange={(e) => setMicEnabled(e.target.checked)}
             />
             <div className="w-9 h-5 bg-border peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent" />
           </label>

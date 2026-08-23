@@ -12,19 +12,21 @@ export function createOverlayWindow(): BrowserWindow {
     return overlayWindow;
   }
 
-  const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
-  const width = 360;
-  const height = 220;
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+  const width = 480;
+  const height = Math.min(620, screenHeight - 48);
 
   overlayWindow = new BrowserWindow({
     width,
     height,
+    minWidth: 340,
+    minHeight: 260,
     x: screenWidth - width - 24,
     y: 24,
     frame: false,
     transparent: true,
     hasShadow: false,
-    resizable: false,
+    resizable: true,
     alwaysOnTop: true,
     skipTaskbar: true,
     backgroundColor: "#00000000",

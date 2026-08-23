@@ -31,6 +31,11 @@ export function createMainWindow(): BrowserWindow {
     );
   }
 
+  // Excluded from screen capture too — session transcripts and the app name
+  // would otherwise identify the tool if the user shares their entire screen
+  // and briefly brings the control panel to front.
+  win.setContentProtection(true);
+
   win.once("ready-to-show", () => win.show());
 
   win.on("close", (evt) => {

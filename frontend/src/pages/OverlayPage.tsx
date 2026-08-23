@@ -26,6 +26,7 @@ interface Suggestion {
 export default function OverlayPage() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [latestTranscript, setLatestTranscript] = useState<Transcript | null>(null);
+  const [aiStatus, setAiStatus] = useState<"idle" | "thinking">("idle");
   const [currentSuggestion, setCurrentSuggestion] = useState("");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
 
@@ -33,6 +34,7 @@ export default function OverlayPage() {
     document.documentElement.style.setProperty("--overlay-drag", "drag");
 
     const unsubscribe = window.electronAPI?.onOverlayUpdate((msg: any) => {
+      console.info("[InterviewCopilot][Overlay] received", msg.type, msg);
       switch (msg.type) {
         case "capturing":
           setIsCapturing(!!msg.value);
@@ -42,7 +44,11 @@ export default function OverlayPage() {
             setLatestTranscript({ speaker: msg.speaker || "user", content: msg.text });
           }
           break;
+        case "question_detected":
+          setAiStatus("thinking");
+          break;
         case "ai_suggestion":
+          setAiStatus("idle");
           setCurrentSuggestion((prev) => prev + msg.token);
           break;
         case "ai_complete":
@@ -53,6 +59,9 @@ export default function OverlayPage() {
             return "";
           });
           break;
+        case "error":
+          setAiStatus("idle");
+          break;
       }
     });
 
@@ -60,16 +69,17 @@ export default function OverlayPage() {
   }, []);
 
   const latestSuggestion = currentSuggestion || suggestions[suggestions.length - 1]?.text;
+  const showThinking = aiStatus === "thinking" && !currentSuggestion;
 
   return (
     <div
-      className="select-none"
+      className="select-none h-screen"
       style={{ WebkitAppRegion: "drag" } as any}
     >
       {/* Overlay Container */}
       <div className="fixed inset-0 p-3 flex flex-col gap-2 pointer-events-none">
         {/* Session indicator */}
-        <div className="flex items-center gap-2 self-end">
+        <div className="flex items-center gap-2 self-end shrink-0">
           <div
             className={clsx(
               "w-1.5 h-1.5 rounded-full",
@@ -82,7 +92,7 @@ export default function OverlayPage() {
         {/* Latest transcript */}
         {latestTranscript && (
           <div
-            className="bg-[rgba(20,20,32,0.92)] border border-[#2D2D3D] backdrop-blur rounded-lg px-3 py-2 pointer-events-auto"
+            className="shrink-0 bg-[rgba(15,15,24,0.55)] border border-[rgba(255,255,255,0.08)] backdrop-blur-md rounded-lg px-3 py-2 pointer-events-auto"
             style={{ WebkitAppRegion: "no-drag" } as any}
           >
             <p className="text-[10px] text-muted mb-0.5 uppercase tracking-wider">
@@ -94,13 +104,30 @@ export default function OverlayPage() {
           </div>
         )}
 
-        {/* AI Coaching Bubble */}
-        {latestSuggestion && (
+        {/* Question detected, waiting for the first token */}
+        {showThinking && (
           <div
-            className="bg-[rgba(108,99,255,0.12)] border border-[rgba(108,99,255,0.3)] backdrop-blur rounded-lg px-3 py-2 pointer-events-auto animate-fade-in"
+            className="shrink-0 bg-[rgba(108,99,255,0.18)] border border-[rgba(108,99,255,0.35)] backdrop-blur-md rounded-lg px-3 py-2 pointer-events-auto animate-fade-in"
             style={{ WebkitAppRegion: "no-drag" } as any}
           >
-            <div className="flex items-center gap-1 mb-1">
+            <div className="flex items-center gap-1">
+              <div className="w-1 h-1 rounded-full bg-accent animate-pulse" />
+              <p className="text-[10px] text-accent uppercase tracking-wider">Thinking...</p>
+            </div>
+          </div>
+        )}
+
+        {/* AI Coaching Bubble — grows to fill the rest of the (now bigger,
+            resizable) overlay window and scrolls internally so long answers
+            are never cut off. Background stays translucent/blurred (glass
+            look, easy to miss on a shared screen) while the text itself is
+            solid and high-contrast so it stays easy to read. */}
+        {latestSuggestion && (
+          <div
+            className="flex-1 min-h-0 flex flex-col bg-[rgba(20,18,38,0.55)] border border-[rgba(108,99,255,0.35)] backdrop-blur-md rounded-lg px-3 py-2.5 pointer-events-auto animate-fade-in"
+            style={{ WebkitAppRegion: "no-drag" } as any}
+          >
+            <div className="flex items-center gap-1 mb-1.5 shrink-0">
               {currentSuggestion && (
                 <div className="w-1 h-1 rounded-full bg-accent animate-pulse" />
               )}
@@ -108,9 +135,8 @@ export default function OverlayPage() {
                 {currentSuggestion ? "AI Coaching..." : "AI Coaching"}
               </p>
             </div>
-            <p className="text-xs text-primary/90 leading-snug">
-              {latestSuggestion.slice(0, 200)}
-              {latestSuggestion.length > 200 && "..."}
+            <p className="flex-1 min-h-0 overflow-y-auto text-sm text-white leading-relaxed whitespace-pre-wrap">
+              {latestSuggestion}
             </p>
           </div>
         )}

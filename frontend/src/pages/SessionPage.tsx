@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useStore } from "../store";
 import { apiClient, createSessionWebSocket } from "../api/client";
@@ -25,6 +25,7 @@ export default function SessionPage() {
     setCapturing, setAudioLevel,
   } = useStore();
 
+  const [aiStatus, setAiStatus] = useState<"idle" | "thinking">("idle");
   const wsRef = useRef<TaggedWebSocket | null>(null);
   const pcmRef = useRef<PcmStreamer | null>(null);
   const streamsRef = useRef<MediaStream[]>([]);
@@ -32,9 +33,11 @@ export default function SessionPage() {
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountedRef = useRef(false);
+  const audioChunkCountRef = useRef(0);
 
   const handleWsMessage = useCallback((event: MessageEvent) => {
     const msg = JSON.parse(event.data);
+    console.info("[InterviewCopilot][WS] received", msg.type, msg);
     // Mirror every event to the overlay window — it runs in its own renderer
     // with its own store instance, so it can't see this component's state.
     window.electronAPI?.pushOverlayUpdate(msg);
@@ -47,18 +50,27 @@ export default function SessionPage() {
             speaker:    msg.speaker || "user",
             content:    msg.text,
             confidence: msg.confidence ?? null,
-            is_question: false,
+            is_question: !!msg.is_question,
             created_at: new Date().toISOString(),
           });
         }
         break;
+      case "question_detected":
+        setAiStatus("thinking");
+        break;
       case "ai_suggestion":
+        setAiStatus("idle");
         appendSuggestionToken(msg.token, msg.provider || "openai");
         break;
       case "ai_complete":
+        console.info("[InterviewCopilot][AI] complete", {
+          chars: msg.full_text?.length ?? 0,
+        });
         finalizeSuggestion();
         break;
       case "error":
+        console.error("[InterviewCopilot][WS] server error", msg.message);
+        setAiStatus("idle");
         toast.error(msg.message || "WebSocket error");
         break;
     }
@@ -72,12 +84,22 @@ export default function SessionPage() {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      console.info("[InterviewCopilot][WS] connected", { sessionId: id });
       reconnectAttemptRef.current = 0;
     };
 
     ws.onmessage = handleWsMessage;
 
+    ws.onerror = (event) => {
+      console.error("[InterviewCopilot][WS] connection error", event);
+    };
+
     ws.onclose = (event) => {
+      console.warn("[InterviewCopilot][WS] closed", {
+        code: event.code,
+        reason: event.reason,
+        wasClean: event.wasClean,
+      });
       if (ws.intentionalClose || event.code === 1000) return;
       scheduleReconnect();
     };
@@ -134,15 +156,25 @@ export default function SessionPage() {
   // and coached, not just what the user says into the mic.
   const startCapture = useCallback(async () => {
     try {
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const streams = [micStream];
+      const micEnabled = useStore.getState().micEnabled;
+      const streams: MediaStream[] = [];
+      let micStream: MediaStream | null = null;
+
+      if (micEnabled) {
+        console.info("[InterviewCopilot][Audio] requesting microphone");
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        streams.push(micStream);
+      } else {
+        console.info("[InterviewCopilot][Audio] microphone disabled — practice mode, system audio only");
+      }
 
       const sourceId = useStore.getState().captureSystemAudio
         ? await window.electronAPI?.getDesktopAudioSourceId().catch(() => null)
         : null;
+      let systemStream: MediaStream | null = null;
       if (sourceId) {
         try {
-          const systemStream = await navigator.mediaDevices.getUserMedia({
+          systemStream = await navigator.mediaDevices.getUserMedia({
             audio: {
               // @ts-expect-error — non-standard Electron desktop-capture constraints
               mandatory: { chromeMediaSource: "desktop" },
@@ -156,16 +188,22 @@ export default function SessionPage() {
           systemStream.getVideoTracks().forEach((t) => t.stop());
           streams.push(systemStream);
         } catch {
-          // System audio is a bonus, not a requirement — keep going with mic only.
+          // System audio is a bonus, not a requirement — keep going with what we have.
         }
+      }
+
+      if (streams.length === 0) {
+        toast.error("No audio source enabled — turn on your microphone or system audio in Settings.");
+        return;
       }
 
       streamsRef.current = streams;
 
-      // Audio level visualization (mic only — just a UI indicator).
+      // Audio level visualization — reflects whichever source is actually
+      // being listened to (mic, or system audio in practice mode).
       const levelCtx = new AudioContext();
       levelCtxRef.current = levelCtx;
-      const source = levelCtx.createMediaStreamSource(micStream);
+      const source = levelCtx.createMediaStreamSource(micStream || systemStream!);
       const analyser = levelCtx.createAnalyser();
       source.connect(analyser);
       const data = new Uint8Array(analyser.frequencyBinCount);
@@ -179,15 +217,32 @@ export default function SessionPage() {
 
       pcmRef.current = new PcmStreamer(streams, (pcm16) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
+          audioChunkCountRef.current += 1;
+          if (audioChunkCountRef.current % 10 === 0) {
+            console.debug("[InterviewCopilot][Audio] chunks sent", audioChunkCountRef.current);
+          }
           wsRef.current.send(
             JSON.stringify({ type: "audio_chunk", data: int16ToBase64(pcm16) })
           );
+        } else if (audioChunkCountRef.current === 0) {
+          console.warn("[InterviewCopilot][Audio] socket is not open; chunk not sent", {
+            readyState: wsRef.current?.readyState,
+          });
         }
       });
 
       setCapturing(true);
+      console.info("[InterviewCopilot][Audio] capture started", {
+        streams: streams.length,
+        socketState: wsRef.current?.readyState,
+        socketUrlState: wsRef.current
+          ? ["CONNECTING", "OPEN", "CLOSING", "CLOSED"][wsRef.current.readyState]
+          : "MISSING",
+      });
+      await window.electronAPI?.openOverlay();
       window.electronAPI?.pushOverlayUpdate({ type: "capturing", value: true });
-    } catch {
+    } catch (error) {
+      console.error("[InterviewCopilot][Audio] capture failed", error);
       toast.error("Could not access microphone.");
     }
   }, []);
@@ -202,6 +257,7 @@ export default function SessionPage() {
     setCapturing(false);
     setAudioLevel(0);
     window.electronAPI?.pushOverlayUpdate({ type: "capturing", value: false });
+    window.electronAPI?.closeOverlay();
   }, []);
 
   // Stop mic/system-audio tracks if the user navigates away without hitting "End".
@@ -217,6 +273,7 @@ export default function SessionPage() {
     stopCapture();
     wsRef.current?.send(JSON.stringify({ type: "session_end" }));
     await endSession();
+    await apiClient.post(`/feedback/sessions/${id}/feedback/generate`);
     navigate(`/feedback/${id}`);
   };
 
@@ -320,6 +377,18 @@ export default function SessionPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Question detected, waiting for the first token */}
+          {aiStatus === "thinking" && !currentSuggestion && (
+            <div className="bg-accent/5 border border-accent/20 rounded-lg p-3 animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+                <span className="text-[10px] text-accent uppercase tracking-wider">
+                  Question detected — thinking...
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Current streaming suggestion */}
           {currentSuggestion && (
             <div className="bg-accent/5 border border-accent/20 rounded-lg p-3 animate-fade-in">

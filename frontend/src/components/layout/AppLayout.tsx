@@ -33,7 +33,7 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="flex h-screen bg-bg text-primary font-sans overflow-hidden">
+    <div className="flex h-full bg-bg text-primary font-sans overflow-hidden">
       {/* ── Sidebar ───────────────────────────────────────── */}
       <aside
         className={clsx(

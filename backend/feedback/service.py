@@ -15,10 +15,11 @@ from sqlalchemy import select
 
 from backend.sessions.models import Session, Transcript
 from backend.feedback.models import SessionFeedback
-from backend.ai.providers.openai_provider import OpenAIProvider
+from backend.auth.models import User
+from backend.ai.router import LLMRouter
 
 logger = logging.getLogger(__name__)
-openai = OpenAIProvider()
+llm_router = LLMRouter()
 
 
 class FeedbackService:
@@ -44,6 +45,9 @@ class FeedbackService:
             logger.warning("No transcripts for session %s — skipping feedback", session_id)
             return None
 
+        user = await self.db.scalar(select(User).where(User.id == session.user_id))
+        plan_tier = user.plan_tier if user else "free"
+
         # Build transcript summary for analysis
         transcript_text = "\n".join([
             f"[{t.speaker or 'user'}]: {t.content}"
@@ -52,7 +56,20 @@ class FeedbackService:
 
         # LLM-generated analysis
         prompt = self._build_feedback_prompt(transcript_text, session.target_role)
-        analysis_text = await openai.complete(prompt, stream=False, max_tokens=1000)
+        logger.info("Feedback LLM request started: session=%s plan=%s", session_id, plan_tier)
+        analysis_result, provider_name = await llm_router.route(
+            prompt,
+            str(session.user_id),
+            stream=False,
+            plan_tier=plan_tier,
+        )
+        analysis_text = analysis_result
+        logger.info(
+            "Feedback LLM response received: session=%s provider=%s chars=%d",
+            session_id,
+            provider_name,
+            len(analysis_text or ""),
+        )
 
         # Parse scores (simplified — in production use structured output / JSON mode)
         scores = self._parse_scores(analysis_text)
