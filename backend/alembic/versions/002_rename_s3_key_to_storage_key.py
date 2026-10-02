@@ -6,6 +6,7 @@ Create Date: 2026-08-20 00:00:00.000000
 
 """
 from alembic import op
+import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "002"
@@ -15,8 +16,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Use raw SQL to be explicit and portable for Postgres
-    op.execute("ALTER TABLE resumes RENAME COLUMN s3_key TO storage_key;")
+    # Fresh databases may already use the current name in revision 001.
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("resumes")}
+    if "s3_key" in columns:
+        op.alter_column("resumes", "s3_key", new_column_name="storage_key")
 
 
 def downgrade() -> None:

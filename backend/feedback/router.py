@@ -3,6 +3,7 @@
 import asyncio
 import logging
 
+from uuid import UUID
 from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -12,6 +13,7 @@ from backend.auth.dependencies import get_current_user
 from backend.auth.models import User
 from backend.feedback.models import SessionFeedback
 from backend.feedback.service import FeedbackService
+from backend.sessions.service import SessionService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -19,10 +21,11 @@ logger = logging.getLogger(__name__)
 
 @router.get("/sessions/{session_id}/feedback")
 async def get_feedback(
-    session_id: str,
+    session_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await SessionService(db).get_session(session_id, str(current_user.id))
     result = await db.execute(
         select(SessionFeedback).where(SessionFeedback.session_id == session_id)
     )
@@ -49,12 +52,13 @@ async def get_feedback(
 
 @router.post("/sessions/{session_id}/feedback/generate")
 async def trigger_feedback(
-    session_id: str,
+    session_id: UUID,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Manually trigger feedback generation (called after session ends)."""
+    await SessionService(db).get_session(session_id, str(current_user.id))
     background_tasks.add_task(_run_feedback, session_id)
     return {"status": "queued", "message": "Feedback generation started."}
 

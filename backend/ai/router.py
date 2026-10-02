@@ -3,6 +3,7 @@ LLM Router — selects provider based on user plan tier,
 tracks usage and cost, automatically falls back to next provider.
 """
 
+import asyncio
 import logging
 import time
 from typing import AsyncGenerator
@@ -54,11 +55,24 @@ class LLMRouter:
 
             try:
                 start_ms = int(time.time() * 1000)
-                result = await provider.complete(prompt, stream=stream)
+                result = await asyncio.wait_for(provider.complete(prompt, stream=stream), timeout=20)
+                if stream:
+                    iterator = result
+                    try:
+                        first = await asyncio.wait_for(anext(iterator), timeout=20)
+                        while not first.strip():
+                            first = await asyncio.wait_for(anext(iterator), timeout=20)
+                    except BaseException:
+                        await iterator.aclose()
+                        raise
+                    result = self._stream_with_first(first, iterator)
                 latency_ms = int(time.time() * 1000) - start_ms
 
                 # Track usage in Redis
-                await self._track_usage(user_id, provider_name, latency_ms)
+                try:
+                    await self._track_usage(user_id, provider_name, latency_ms)
+                except Exception:
+                    logger.warning("Usage tracking unavailable", exc_info=True)
 
                 logger.info("LLM routed to %s (latency=%dms)", provider_name, latency_ms)
                 return result, provider_name
@@ -73,6 +87,18 @@ class LLMRouter:
                 continue
 
         raise RuntimeError("All LLM providers failed to respond.")
+
+    async def _stream_with_first(self, first, iterator):
+        try:
+            yield first
+            while True:
+                try:
+                    token = await asyncio.wait_for(anext(iterator), timeout=20)
+                except StopAsyncIteration:
+                    return
+                yield token
+        finally:
+            await iterator.aclose()
 
     async def _track_usage(self, user_id: str, provider: str, latency_ms: int):
         redis_client = get_redis()

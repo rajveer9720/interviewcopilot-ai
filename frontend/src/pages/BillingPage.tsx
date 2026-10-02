@@ -17,17 +17,48 @@ declare global {
   }
 }
 
+let checkoutScript: Promise<void> | null = null;
+function loadCheckout(): Promise<void> {
+  if (window.Razorpay) return Promise.resolve();
+  if (!checkoutScript) {
+    checkoutScript = new Promise<void>((resolve, reject) => {
+      const script = document.createElement("script");
+      const timer = setTimeout(() => fail(), 10000);
+      const fail = () => {
+        clearTimeout(timer);
+        script.remove();
+        checkoutScript = null;
+        reject(new Error("Payment service unavailable. Please try again."));
+      };
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.async = true;
+      script.onerror = fail;
+      script.onload = () => {
+        clearTimeout(timer);
+        if (window.Razorpay) resolve();
+        else fail();
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return checkoutScript;
+}
+
 export default function BillingPage() {
   const { user } = useStore();
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
 
   useEffect(() => {
-    apiClient.get("/billing/plans").then((r) => setPlans(r.data));
+    apiClient.get("/billing/plans").then((r) => setPlans(r.data)).catch(() => toast.error("Could not load plans. Please retry."));
   }, []);
 
   const handleCheckout = async (plan: Plan) => {
-    if (!plan.razorpay_plan_id || !window.Razorpay) return;
+    if (!plan.razorpay_plan_id) { toast.error("This plan is not configured yet."); return; }
+    if (checkoutLoading) return;
+    setCheckoutLoading(true);
     try {
+      await loadCheckout();
       const { data } = await apiClient.post("/billing/checkout", null, {
         params: { plan_id: plan.razorpay_plan_id },
       });
@@ -42,7 +73,9 @@ export default function BillingPage() {
       });
       checkout.open();
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || "Checkout failed");
+      toast.error(err.response?.data?.detail || err.message || "Checkout failed");
+    } finally {
+      setCheckoutLoading(false);
     }
   };
 
@@ -107,7 +140,7 @@ export default function BillingPage() {
 
               <button
                 onClick={() => handleCheckout(plan)}
-                disabled={isCurrentPlan || plan.id === "free"}
+                disabled={checkoutLoading || isCurrentPlan || plan.id === "free"}
                 className={clsx(
                   "w-full py-2 rounded text-sm font-medium transition-colors flex items-center justify-center gap-1",
                   isCurrentPlan

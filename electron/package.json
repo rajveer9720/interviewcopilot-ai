@@ -11,7 +11,7 @@
     "dev": "concurrently \"npm run build:watch\" \"wait-on dist/main.js && cross-env NODE_ENV=development electron .\"",
     "build": "tsc -p tsconfig.json",
     "build:watch": "tsc -p tsconfig.json --watch",
-    "build:win": "npm run build && electron-builder --win --x64",
+    "build:win": "npm --prefix ../frontend run build && npm run build && electron-builder --win --x64 --publish never",
     "build:mac": "npm run build && electron-builder --mac",
     "dist": "electron-builder"
   },

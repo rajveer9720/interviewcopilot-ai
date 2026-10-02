@@ -61,6 +61,7 @@ interface SessionSlice {
   transcripts: Transcript[];
   aiSuggestions: AISuggestion[];
   currentSuggestion: string;
+  currentProvider: string;
   wsRef: WebSocket | null;
   startSession: (config: CreateSessionPayload) => Promise<void>;
   endSession: () => Promise<void>;
@@ -129,12 +130,13 @@ export const useStore = create<AppStore>()(
       transcripts: [],
       aiSuggestions: [],
       currentSuggestion: "",
+      currentProvider: "",
       wsRef: null,
 
       startSession: async (config) => {
         set({ sessionStatus: "connecting" });
         const { data } = await apiClient.post<Session>("/sessions/", config);
-        set({ session: data, sessionStatus: "active", transcripts: [], aiSuggestions: [] });
+        set({ session: data, sessionStatus: "active", transcripts: [], aiSuggestions: [], currentSuggestion: "", currentProvider: "" });
       },
 
       endSession: async () => {
@@ -150,7 +152,7 @@ export const useStore = create<AppStore>()(
         })),
 
       appendSuggestionToken: (token, provider) =>
-        set((s) => ({ currentSuggestion: s.currentSuggestion + token })),
+        set((s) => ({ currentSuggestion: s.currentSuggestion + token, currentProvider: provider })),
 
       finalizeSuggestion: () =>
         set((s) => ({
@@ -158,7 +160,7 @@ export const useStore = create<AppStore>()(
             ...s.aiSuggestions,
             {
               text: s.currentSuggestion,
-              provider: "openai",
+              provider: s.currentProvider,
               isStreaming: false,
               timestamp: new Date().toISOString(),
             },
@@ -180,7 +182,7 @@ export const useStore = create<AppStore>()(
       audioLevel: 0,
       selectedMicId: null,
       captureSystemAudio: true,
-      micEnabled: true,
+      micEnabled: false,
       setCapturing: (v) => set({ isCapturing: v }),
       setAudioLevel: (v) => set({ audioLevel: v }),
       setMicId: (id) => set({ selectedMicId: id }),

@@ -1,18 +1,22 @@
+"""Authenticated, bounded and ordered live audio pipeline."""
 import asyncio
 import base64
+import binascii
 import json
 import logging
 import math
+import time
+import uuid
 from array import array
-from datetime import datetime, timezone
+from contextlib import suppress
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.core.security import decode_access_token
 from backend.core.database import AsyncSessionFactory
-from backend.core.redis import get_redis
+from backend.sessions.models import Session, AIResponse
 from backend.sessions.service import SessionService
 from backend.transcripts.whisper_client import WhisperClient
 from backend.ai.router import LLMRouter
@@ -21,14 +25,13 @@ from backend.auth.models import User
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
 SAMPLE_RATE = 16_000
 BYTES_PER_SAMPLE = 2
 MIN_UTTERANCE_BYTES = int(SAMPLE_RATE * BYTES_PER_SAMPLE * 0.35)
-SILENCE_BYTES = int(SAMPLE_RATE * BYTES_PER_SAMPLE * 0.8)
-MAX_UTTERANCE_BYTES = int(SAMPLE_RATE * BYTES_PER_SAMPLE * 12)
-SPEECH_RMS_THRESHOLD = 450
-
+SILENCE_BYTES = int(SAMPLE_RATE * BYTES_PER_SAMPLE * 0.65)
+MAX_UTTERANCE_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * 20
+MAX_MESSAGE_CHARS = 100_000
+MAX_CHUNK_BYTES = 32_000
 QUESTION_MARKERS = [
     "tell me", "describe", "explain", "what", "how", "why", "when",
     "can you", "could you", "would you", "have you", "do you",
@@ -45,219 +48,212 @@ QUESTION_MARKERS = [
 whisper = WhisperClient()
 llm_router = LLMRouter()
 prompt_builder = PromptBuilder()
-
-_background_tasks: set[asyncio.Task] = set()
-
-
-def _spawn(coro) -> asyncio.Task:
-    task = asyncio.create_task(coro)
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
-    return task
+SPEECH_RMS_THRESHOLD = 250
 
 
-async def _load_plan_tier(user_id: str) -> str:
-    try:
-        async with AsyncSessionFactory() as db:
-            user = await db.scalar(select(User).where(User.id == user_id))
-            return user.plan_tier if user else "free"
-    except Exception as e:
-        logger.exception("Could not load user plan: user=%s error=%s", user_id, e)
-        return "free"
+async def _authorized_session(session_id: str, user_id: str):
+    async with AsyncSessionFactory() as db:
+        user = await db.scalar(select(User).where(User.id == uuid.UUID(user_id)))
+        session = await db.scalar(select(Session).where(
+            Session.id == uuid.UUID(session_id), Session.user_id == uuid.UUID(user_id)))
+        if not user or not user.is_active or not session or session.status != "active":
+            return None
+        return user.plan_tier
 
 
 @router.websocket("/ws/session/{session_id}")
-async def websocket_session(
-    websocket: WebSocket,
-    session_id: str,
-    token: str = Query(...),
-):
-    try:
-        payload = decode_access_token(token)
-        user_id = payload["sub"]
-    except Exception as e:
-        logger.exception("WS authentication failed: session=%s error=%s", session_id, e)
-        await websocket.close(code=4001, reason="Unauthorized")
+async def websocket_session(websocket: WebSocket, session_id: str):
+    origin = websocket.headers.get("origin")
+    if origin and origin not in settings.CORS_ORIGINS:
+        await websocket.close(code=4003, reason="Origin not allowed")
         return
-
     await websocket.accept()
-    logger.info("WS connected: session=%s user=%s", session_id, user_id)
-
-    plan_tier = await _load_plan_tier(user_id)
-    logger.info("WS user plan loaded: session=%s plan=%s", session_id, plan_tier)
-
-    await _send(websocket, {
-        "type": "connected",
-        "session_id": session_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
-
-    audio_buffer = bytearray()
-    silence_bytes = 0
-    speech_started = False
-
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+        if len(raw) > 4096:
+            raise ValueError("Authentication message too large")
+        credentials = json.loads(raw)
+        if credentials.get("type") != "authenticate":
+            raise ValueError("Authentication required")
+        token = credentials["token"]
+        user_id = decode_access_token(token)["sub"]
+        plan_tier = await _authorized_session(session_id, user_id)
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid credentials or session")
+        return
+    if plan_tier is None:
+        await websocket.close(code=4003, reason="Session unavailable")
+        return
+    await _send(websocket, {"type": "connected", "session_id": session_id})
+    queue = asyncio.Queue(maxsize=4)
+    history = []
+    partial_question = []
+    async def process_queue():
+        while True:
+            audio, speaker, final = await queue.get()
+            try:
+                await asyncio.wait_for(_process_audio_chunk(
+                    websocket, session_id, user_id, audio, plan_tier, speaker, history,
+                    partial_question, final), 50)
+            except asyncio.TimeoutError:
+                partial_question.clear()
+                await _send(websocket, {"type": "error", "message": "Answer timed out. Please repeat the question."})
+            finally:
+                queue.task_done()
+    worker = asyncio.create_task(process_queue())
+    buffer = bytearray()
+    pre_roll = bytearray()
+    silence = 0
+    speaking = False
+    speaker = "interviewer"
+    async def enqueue(final=True):
+        nonlocal silence, speaking
+        if speaking and (len(buffer) >= MIN_UTTERANCE_BYTES or final):
+            if queue.full():
+                await _send(websocket, {"type": "error", "message": "Processing is busy. Please pause and repeat the last question."})
+            else:
+                queue.put_nowait((bytes(buffer), speaker, final))
+        buffer.clear()
+        silence = 0
+        speaking = not final
     try:
         while True:
-            raw = await websocket.receive_text()
-            message = json.loads(raw)
-            msg_type = message.get("type")
-            logger.debug(
-                "WS message received: session=%s type=%s bytes=%d",
-                session_id,
-                msg_type,
-                len(raw),
-            )
-
-            if msg_type == "audio_chunk":
-                pcm_bytes = base64.b64decode(message["data"])
-                audio_buffer.extend(pcm_bytes)
-                if _has_speech(pcm_bytes):
-                    speech_started = True
-                    silence_bytes = 0
-                elif speech_started:
-                    silence_bytes += len(pcm_bytes)
-                logger.debug(
-                    "WS audio received: session=%s bytes=%d buffer=%d silence=%d",
-                    session_id,
-                    len(pcm_bytes),
-                    len(audio_buffer),
-                    silence_bytes,
-                )
-
-                utterance_complete = (
-                    speech_started
-                    and len(audio_buffer) >= MIN_UTTERANCE_BYTES
-                    and silence_bytes >= SILENCE_BYTES
-                )
-                if utterance_complete or len(audio_buffer) >= MAX_UTTERANCE_BYTES:
-                    chunk = bytes(audio_buffer)
-                    audio_buffer.clear()
-                    silence_bytes = 0
-                    speech_started = False
-                    logger.info(
-                        "WS utterance complete: session=%s bytes=%d reason=%s",
-                        session_id,
-                        len(chunk),
-                        "silence" if utterance_complete else "max_duration",
-                    )
-                    _spawn(
-                        _process_audio_chunk(websocket, session_id, user_id, chunk, plan_tier)
-                    )
-
-            elif msg_type == "session_end":
-                await _send(websocket, {"type": "session_ending"})
-                if speech_started and len(audio_buffer) >= MIN_UTTERANCE_BYTES:
-                    logger.info(
-                        "WS flushing final utterance: session=%s bytes=%d",
-                        session_id,
-                        len(audio_buffer),
-                    )
-                    await _process_audio_chunk(
-                        websocket, session_id, user_id, bytes(audio_buffer), plan_tier
-                    )
-                    audio_buffer.clear()
-                _spawn(_generate_feedback(session_id))
-                break
-
-            elif msg_type == "ping":
-                await _send(websocket, {"type": "pong"})
-
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=45)
+            try:
+                if len(raw) > MAX_MESSAGE_CHARS:
+                    raise ValueError("Message too large")
+                msg = json.loads(raw)
+                if not isinstance(msg, dict):
+                    raise ValueError("Invalid message")
+                kind = msg.get("type")
+                if kind == "audio_chunk":
+                    audio = base64.b64decode(msg["data"], validate=True)
+                    if not audio or len(audio) > MAX_CHUNK_BYTES or len(audio) % 2:
+                        raise ValueError("Invalid audio chunk")
+                    if _has_speech(audio):
+                        if not speaking:
+                            buffer.extend(pre_roll)
+                            pre_roll.clear()
+                        speaking = True
+                        silence = 0
+                    elif speaking:
+                        silence += len(audio)
+                    else:
+                        pre_roll.extend(audio)
+                        del pre_roll[:-6400]
+                        continue
+                    buffer.extend(audio)
+                    if silence >= SILENCE_BYTES or len(buffer) >= MAX_UTTERANCE_BYTES:
+                        await enqueue(final=silence >= SILENCE_BYTES)
+                elif kind == "capture_config":
+                    await enqueue()
+                    pre_roll.clear()
+                    speaker = "interviewer" if msg.get("source") == "system" else "user"
+                elif kind == "audio_pause":
+                    await enqueue()
+                    pre_roll.clear()
+                elif kind == "session_end":
+                    await enqueue()
+                    await _send(websocket, {"type": "session_ending"})
+                    await asyncio.wait_for(queue.join(), timeout=55)
+                    async with AsyncSessionFactory() as db:
+                        await SessionService(db).end_session(session_id, user_id)
+                        await db.commit()
+                    await _send(websocket, {"type": "session_ended"})
+                    await websocket.close(code=1000)
+                    break
+                elif kind == "ping":
+                    await _send(websocket, {"type": "pong"})
+                else:
+                    raise ValueError("Unknown message type")
+            except (ValueError, KeyError, TypeError, binascii.Error):
+                await _send(websocket, {"type": "error", "message": "Invalid audio message."})
     except WebSocketDisconnect:
-        logger.info("WS disconnected: session=%s", session_id)
-    except Exception as e:
-        logger.error("WS error: %s", e)
-        await _send(websocket, {"type": "error", "message": str(e)})
+        pass
+    except asyncio.TimeoutError:
+        await websocket.close(code=4008, reason="Connection or processing timed out")
+    except Exception:
+        logger.exception("Live session failed: session=%s", session_id)
+        await _send(websocket, {"type": "error", "message": "Session connection failed. Please reconnect."})
     finally:
-        logger.info("WS closed: session=%s", session_id)
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
 
 
-async def _process_audio_chunk(
-    websocket: WebSocket,
-    session_id: str,
-    user_id: str,
-    audio_bytes: bytes,
-    plan_tier: str,
-):
+async def _process_audio_chunk(websocket, session_id, user_id, audio_bytes, plan_tier,
+                               speaker="interviewer", history=None, partial_question=None,
+                               final=True):
+    request_id = str(uuid.uuid4())
+    started = time.perf_counter()
     try:
-        logger.info("Whisper transcription started: session=%s", session_id)
-        result = await whisper.transcribe(audio_bytes)
-        if not result or not result.get("text", "").strip():
-            logger.warning("Whisper returned no text: session=%s result=%r", session_id, result)
+        result = await whisper.transcribe(audio_bytes) if len(audio_bytes) >= 1000 else {}
+        text = (result or {}).get("text", "").strip()
+        if partial_question is not None:
+            if text:
+                partial_question.append(text)
+            if sum(len(part) for part in partial_question) > 16000:
+                raise RuntimeError("Question is too long")
+            if not final:
+                if text:
+                    await _send(websocket, {"type": "transcript", "text": text, "is_final": False,
+                        "speaker": speaker, "is_question": False})
+                return
+            text = " ".join(partial_question)
+            partial_question.clear()
+        if not text:
             return
-
-        text = result["text"].strip()
-        confidence = result.get("confidence", 1.0)
         is_question = _detect_question(text)
-        logger.info(
-            "Whisper transcription complete: session=%s chars=%d is_question=%s confidence=%s text=%r",
-            session_id,
-            len(text),
-            is_question,
-            confidence,
-            text,
-        )
-
-        await _send(websocket, {
-            "type": "transcript",
-            "text": text,
-            "is_final": True,
-            "speaker": "user",
-            "confidence": confidence,
-            "is_question": is_question,
-        })
-
+        await _send(websocket, {"type": "transcript", "text": text, "is_final": True,
+            "speaker": speaker, "confidence": result.get("confidence", 1), "is_question": is_question})
         async with AsyncSessionFactory() as db:
-            svc = SessionService(db)
-            await svc.save_transcript(
-                session_id=session_id,
-                content=text,
-                confidence=confidence,
-                is_question=is_question,
-            )
+            transcript = await SessionService(db).save_transcript(
+                session_id=uuid.UUID(session_id), content=text, speaker=speaker,
+                confidence=result.get("confidence", 1), is_question=is_question)
+            transcript_id = transcript.id
             await db.commit()
-
-        if is_question:
-            logger.info("Question detected; building AI prompt: session=%s", session_id)
-            await _send(websocket, {
-                "type": "question_detected",
-                "text": text,
-            })
-
-            prompt = await prompt_builder.build(
-                question=text,
-                user_id=user_id,
-            )
-
-            full_response = ""
-            logger.info("LLM request started: session=%s user=%s", session_id, user_id)
-            llm_result, provider_name = await llm_router.route(
-                prompt, user_id, stream=True, plan_tier=plan_tier
-            )
-            logger.info("LLM provider selected: session=%s provider=%s", session_id, provider_name)
-            async for token in llm_result:
-                full_response += token
-                await _send(websocket, {
-                    "type": "ai_suggestion",
-                    "token": token,
-                    "provider": provider_name,
-                })
-
-            logger.info(
-                "LLM response complete: session=%s response_chars=%d",
-                session_id,
-                len(full_response),
-            )
-            if not full_response.strip():
-                raise RuntimeError(f"{provider_name} returned an empty response")
-
-            await _send(websocket, {
-                "type": "ai_complete",
-                "full_text": full_response,
-            })
-
-    except Exception as e:
-        logger.exception("Audio processing error: session=%s error=%s", session_id, e)
-        await _send(websocket, {"type": "error", "message": "Processing error."})
+        if not is_question:
+            if history is not None:
+                history.append("Heard: " + text)
+                del history[:-6]
+            return
+        await _send(websocket, {"type": "question_detected", "text": text, "request_id": request_id})
+        prompt = await prompt_builder.build(question=text, user_id=user_id)
+        if history:
+            prompt += "\nRecent conversation (context only):\n" + "\n".join(history)[-2000:]
+        tokens, provider = await llm_router.route(prompt, user_id, stream=True, plan_tier=plan_tier)
+        full_text = ""
+        first_token_ms = None
+        try:
+            async for token in tokens:
+                if first_token_ms is None:
+                    first_token_ms = round((time.perf_counter() - started) * 1000)
+                full_text += token
+                await _send(websocket, {"type": "ai_suggestion", "token": token,
+                    "provider": provider, "request_id": request_id})
+        finally:
+            await tokens.aclose()
+        if not full_text.strip():
+            raise RuntimeError("Empty answer")
+        async with AsyncSessionFactory() as db:
+            db.add(AIResponse(session_id=uuid.UUID(session_id), transcript_id=transcript_id,
+                provider=provider, response_text=full_text, response_type="answer",
+                latency_ms=first_token_ms))
+            session = await db.get(Session, uuid.UUID(session_id))
+            session.total_questions += 1
+            await db.commit()
+        if history is not None:
+            history.extend(["Question: " + text, "Answer: " + full_text])
+            del history[:-6]
+        await _send(websocket, {"type": "ai_complete", "full_text": full_text,
+            "provider": provider, "request_id": request_id, "first_token_ms": first_token_ms})
+        logger.info("Answer completed: session=%s first_token_ms=%s", session_id, first_token_ms)
+    except Exception:
+        if partial_question is not None:
+            partial_question.clear()
+        logger.exception("Audio processing failed: session=%s", session_id)
+        await _send(websocket, {"type": "error", "request_id": request_id,
+            "message": "Could not process this question. Please repeat or try again."})
 
 
 def _detect_question(text: str) -> bool:
@@ -278,21 +274,5 @@ def _has_speech(pcm_bytes: bytes) -> bool:
     return rms >= SPEECH_RMS_THRESHOLD
 
 
-async def _generate_feedback(session_id: str):
-    try:
-        await asyncio.sleep(1)
-        from backend.feedback.service import FeedbackService
-        async with AsyncSessionFactory() as db:
-            svc = FeedbackService(db)
-            await svc.generate_feedback(session_id)
-            await db.commit()
-        logger.info("Feedback generation complete: session=%s", session_id)
-    except Exception as e:
-        logger.exception("Feedback generation failed: session=%s error=%s", session_id, e)
-
-
 async def _send(ws: WebSocket, data: dict):
-    try:
-        await ws.send_text(json.dumps(data))
-    except Exception as e:
-        logger.exception("WS send failed: type=%s error=%s", data.get("type"), e)
+    await ws.send_text(json.dumps(data))

@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000/api/v1";
+const BASE_URL = import.meta.env.VITE_APP_API_URL || "http://localhost:8000/api/v1";
 
 export const apiClient = axios.create({
   baseURL: BASE_URL,
@@ -16,7 +16,7 @@ apiClient.interceptors.request.use((config) => {
   if (stored) {
     try {
       const { state } = JSON.parse(stored);
-      if (state?.accessToken) {
+      if (state?.accessToken && !config.headers.Authorization) {
         config.headers.Authorization = `Bearer ${state.accessToken}`;
       }
     } catch {}
@@ -26,13 +26,13 @@ apiClient.interceptors.request.use((config) => {
 
 function logoutAndRedirect() {
   localStorage.removeItem("interviewcopilot-store");
-  window.location.href = "/login";
+  window.location.href = ["file:", "app:"].includes(window.location.protocol) ? "#/login" : "/login";
 }
 
 // Dedupe concurrent 401s into a single in-flight refresh call.
 let refreshPromise: Promise<string> | null = null;
 
-async function refreshAccessToken(): Promise<string> {
+export async function refreshAccessToken(): Promise<string> {
   if (!refreshPromise) {
     refreshPromise = axios
       .post<{ access_token: string }>(`${BASE_URL}/auth/refresh`, {}, { withCredentials: true })
@@ -74,10 +74,9 @@ apiClient.interceptors.response.use(
 
 export function createSessionWebSocket(
   sessionId: string,
-  token: string,
 ): WebSocket {
   const wsBase = BASE_URL.replace("http", "ws").replace("/api/v1", "");
-  const url = `${wsBase}/ws/session/${sessionId}?token=${token}`;
+  const url = `${wsBase}/ws/session/${sessionId}`;
   console.info("[InterviewCopilot][WS] connecting", { sessionId, wsBase });
   return new WebSocket(url);
 }

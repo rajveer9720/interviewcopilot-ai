@@ -95,7 +95,7 @@ def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 16000) -> bytes:
 class WhisperClient:
 
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, timeout=20, max_retries=1)
         self.model = settings.OPENAI_WHISPER_MODEL
 
     async def transcribe(
@@ -146,6 +146,9 @@ class WhisperClient:
                     avg_confidence = min(1.0, max(0.0, 1.0 - (sum(confs) / len(confs)) / 5))
 
             detected_language = getattr(response, "language", None)
+            if detected_language:
+                detected_language = {"english": "en", "hindi": "hi"}.get(
+                    detected_language.lower(), detected_language.lower())
 
             if _is_hallucinated_silence(segments):
                 logger.info(
@@ -183,4 +186,4 @@ class WhisperClient:
 
         except Exception as e:
             logger.exception("Whisper transcription error: %s", e)
-            return {"text": "", "confidence": 0.0, "language": language}
+            raise RuntimeError("Transcription unavailable") from e

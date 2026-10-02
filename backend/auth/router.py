@@ -1,7 +1,7 @@
 """Auth domain — FastAPI router."""
 
 import secrets
-from fastapi import APIRouter, Depends, Response, Cookie, HTTPException, status
+from fastapi import APIRouter, Depends, Response, Request, Cookie, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.database import get_db
@@ -17,6 +17,12 @@ from backend.auth.models import User
 from backend.config import settings
 
 router = APIRouter()
+
+
+def _check_refresh_origin(request: Request):
+    origin = request.headers.get("origin")
+    if origin and origin not in settings.CORS_ORIGINS:
+        raise HTTPException(status_code=403, detail="Origin not allowed")
 
 
 @router.post("/register", response_model=UserResponse, status_code=201)
@@ -52,7 +58,7 @@ async def login(
         value=f"{refresh_id}:{refresh_value}",
         httponly=True,
         secure=settings.ENV == "production",
-        samesite="lax",
+        samesite="none" if settings.ENV == "production" else "lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
 
@@ -64,10 +70,12 @@ async def login(
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
+    request: Request,
     response: Response,
     refresh_token: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
 ):
+    _check_refresh_origin(request)
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Refresh token missing.")
 
@@ -86,7 +94,9 @@ async def refresh_token(
         raise HTTPException(status_code=401, detail="Invalid refresh token.")
 
     # Rotate: invalidate the used refresh token and issue a new one.
-    await redis.delete(f"refresh:{refresh_id}")
+    consumed = await redis.getdel(f"refresh:{refresh_id}")
+    if consumed != stored:
+        raise HTTPException(status_code=401, detail="Refresh token already used.")
 
     svc = AuthService(db)
     user = await svc.get_user_by_id(stored_user_id)
@@ -104,7 +114,7 @@ async def refresh_token(
         value=f"{new_id}:{new_value}",
         httponly=True,
         secure=settings.ENV == "production",
-        samesite="lax",
+        samesite="none" if settings.ENV == "production" else "lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
 
@@ -115,7 +125,11 @@ async def refresh_token(
 
 
 @router.post("/logout", status_code=204)
-async def logout(response: Response, refresh_token: str | None = Cookie(default=None)):
+async def logout(request: Request, response: Response, refresh_token: str | None = Cookie(default=None)):
+    _check_refresh_origin(request)
+    if refresh_token:
+        refresh_id = refresh_token.split(":", 1)[0]
+        await get_redis().delete(f"refresh:{refresh_id}")
     response.delete_cookie("refresh_token")
 
 

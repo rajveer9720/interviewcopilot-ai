@@ -10,7 +10,7 @@ from backend.config import settings
 class OpenAIProvider(LLMProvider):
 
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, timeout=20, max_retries=1)
         self.model = settings.OPENAI_MODEL
 
     async def complete(

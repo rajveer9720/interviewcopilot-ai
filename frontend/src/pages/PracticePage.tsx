@@ -55,8 +55,7 @@ export default function PracticePage() {
     setLoading(true);
     try {
       await startSession({ ...data, mode: selectedMode });
-      const sessions = await apiClient.get("/sessions/");
-      const latest = sessions.data[0];
+      const latest = useStore.getState().session!;
       toast.success("Session started!");
       navigate(`/session/${latest.id}`);
     } catch (err: any) {

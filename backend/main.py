@@ -12,7 +12,8 @@ from contextlib import asynccontextmanager
 
 from backend.config import settings
 from backend.core.database import engine, Base
-from backend.core.redis import init_redis, close_redis
+from backend.core.redis import init_redis, close_redis, get_redis
+from sqlalchemy import text
 from backend.core.middleware import RateLimitMiddleware, RequestLoggingMiddleware
 from backend.core.logging_config import configure_logging, get_logger
 from backend.core.exceptions import AppException
@@ -106,6 +107,16 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health():
         return {"status": "ok", "version": settings.APP_VERSION}
+
+    @app.get("/ready")
+    async def ready():
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            await get_redis().ping()
+        except Exception:
+            return JSONResponse(status_code=503, content={"status": "unavailable"})
+        return {"status": "ready"}
 
     return app
 

@@ -8,12 +8,19 @@ import {
   Menu,
   nativeImage,
   globalShortcut,
+  protocol,
+  net,
 } from "electron";
 import * as path from "path";
 import Store from "electron-store";
 import { createMainWindow } from "./windows/main-window";
 import { createOverlayWindow, getOverlayWindow } from "./windows/overlay-window";
 import { exec } from "child_process";
+import { pathToFileURL } from "url";
+
+protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: {
+  standard: true, secure: true, supportFetchAPI: true, corsEnabled: true,
+} }]);
 
 // ─── App state ────────────────────────────────────────────────────────────────
 const store = new Store<{ apiUrl: string; accessToken: string }>({
@@ -40,6 +47,19 @@ app.on("second-instance", () => {
 // ─── App ready ────────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   nativeTheme.themeSource = "dark";
+  if (app.isPackaged) {
+    const root = path.join(process.resourcesPath, "frontend");
+    protocol.handle("app", (request) => {
+      const url = new URL(request.url);
+      if (url.hostname !== "interviewcopilot") return new Response("Forbidden", { status: 403 });
+      let pathname: string;
+      try { pathname = decodeURIComponent(url.pathname); } catch { return new Response("Bad request", { status: 400 }); }
+      const asset = path.resolve(root, "." + (pathname === "/" ? "/index.html" : pathname));
+      const relative = path.relative(root, asset);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) return new Response("Forbidden", { status: 403 });
+      return net.fetch(pathToFileURL(asset).toString());
+    });
+  }
 
   mainWindow = createMainWindow();
   setupTray();
@@ -62,6 +82,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  (app as typeof app & { isQuitting?: boolean }).isQuitting = true;
   meetingDetectionInterval && clearInterval(meetingDetectionInterval);
   globalShortcut.unregisterAll();
 });
@@ -119,6 +140,12 @@ function setupTray() {
 
 // ─── IPC handlers ─────────────────────────────────────────────────────────────
 function registerIpcHandlers() {
+  let overlayCapturing = false;
+  let overlayTranscript: unknown = null;
+  let overlayQuestion: unknown = null;
+  let overlayAnswer: any = null;
+  let overlayConnection: unknown = { type: "connected" };
+  let overlayError: unknown = null;
   // -- Auth token handoff --
   ipcMain.handle("auth:set-token", (_evt, token: string) => {
     store.set("accessToken", token);
@@ -135,8 +162,14 @@ function registerIpcHandlers() {
   });
 
   // -- Overlay window --
-  ipcMain.handle("overlay:open", () => {
-    createOverlayWindow();
+  ipcMain.handle("overlay:open", async () => {
+    const overlay = createOverlayWindow();
+    if (overlay.webContents.isLoading()) {
+      await new Promise<void>((resolve, reject) => {
+        overlay.webContents.once("did-finish-load", () => resolve());
+        overlay.webContents.once("did-fail-load", () => reject(new Error("Overlay could not load")));
+      });
+    }
   });
 
   ipcMain.handle("overlay:close", () => {
@@ -154,7 +187,43 @@ function registerIpcHandlers() {
 
   // -- Overlay relay: main window -> main process -> overlay window --
   ipcMain.on("overlay:push", (_evt, payload) => {
+    if (_evt.sender !== mainWindow?.webContents || !payload || typeof payload.type !== "string") return;
+    if (payload.type === "reset") {
+      overlayCapturing = false;
+      overlayTranscript = null;
+      overlayQuestion = null;
+      overlayAnswer = null;
+      overlayError = null;
+    }
+    if (payload.type === "capturing") overlayCapturing = !!payload.value;
+    if (payload.type === "transcript") overlayTranscript = payload;
+    if (payload.type === "question_detected") {
+      overlayQuestion = payload;
+      overlayAnswer = null;
+      overlayError = null;
+    }
+    if (payload.type === "ai_suggestion") {
+      overlayAnswer = { ...payload, token: (overlayAnswer?.token || "") + payload.token };
+    }
+    if (payload.type === "ai_complete") overlayAnswer = payload;
+    if (payload.type === "connected" || payload.type === "connection") {
+      overlayConnection = payload;
+      if (payload.type === "connection" && !overlayAnswer?.full_text) {
+        overlayQuestion = null;
+        overlayAnswer = null;
+      }
+    }
+    if (payload.type === "error") overlayError = payload;
     getOverlayWindow()?.webContents.send("overlay:push", payload);
+  });
+
+  // Renderer subscribes after page load; replay current state on open/reopen.
+  ipcMain.on("overlay:ready", (evt) => {
+    if (evt.sender !== getOverlayWindow()?.webContents) return;
+    for (const payload of [overlayConnection, { type: "capturing", value: overlayCapturing },
+      overlayTranscript, overlayQuestion, overlayAnswer, overlayError]) {
+      if (payload) evt.sender.send("overlay:push", payload);
+    }
   });
 
   // -- Window controls (main window is frameless on Windows — see

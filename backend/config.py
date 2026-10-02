@@ -7,6 +7,8 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from typing import Literal
+from pydantic import model_validator
+from urllib.parse import urlsplit
 
 # Resolved relative to this file (not the process cwd) so `.env` loads
 # correctly whether the app is started from the repo root (`backend.main:app`,
@@ -56,7 +58,7 @@ class Settings(BaseSettings):
     OPENAI_WHISPER_MODEL: str = "whisper-1"
 
     GEMINI_API_KEY: str
-    GEMINI_MODEL: str = "gemini-1.5-pro"
+    GEMINI_MODEL: str = "gemini-3.1-flash-lite"
 
     # ──────────────────────────────────────────────
     # Storage (S3-compatible)
@@ -91,10 +93,21 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "app://interviewcopilot",
         "app://.",       # Electron custom protocol
     ]
 
     model_config = SettingsConfigDict(env_file=ENV_FILE_PATH, case_sensitive=True)
+
+    @model_validator(mode="after")
+    def validate_production(self):
+        if self.ENV == "production":
+            if self.DEBUG:
+                raise ValueError("DEBUG must be false in production")
+            password = urlsplit(self.DATABASE_URL).password
+            if not password or password.lower() in {"password", "test", "changeme"}:
+                raise ValueError("Configure a non-default database password for production")
+        return self
 
 
 @lru_cache

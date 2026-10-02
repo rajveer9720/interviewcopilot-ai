@@ -8,9 +8,9 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://interviewcopilot:password@db:5432/interviewcopilot
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-interviewcopilot}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-interviewcopilot}
       REDIS_URL: redis://redis:6379
     env_file:
       - ../backend/.env
@@ -18,7 +18,7 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - app-network
@@ -27,16 +27,14 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: interviewcopilot
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: interviewcopilot
+      POSTGRES_USER: ${POSTGRES_USER:-interviewcopilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-interviewcopilot}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U interviewcopilot"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -49,8 +47,11 @@ services:
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
-    ports:
-      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - app-network
 
@@ -79,7 +80,7 @@ services:
     env_file:
       - ../backend/.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://interviewcopilot:password@db:5432/interviewcopilot
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-interviewcopilot}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-interviewcopilot}
     depends_on:
       db:
         condition: service_healthy

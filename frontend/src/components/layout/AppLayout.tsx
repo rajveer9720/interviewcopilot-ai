@@ -5,6 +5,7 @@ import {
   LogOut, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { clsx } from "clsx";
+import { apiClient } from "../../api/client";
 
 const NavItem = ({ to, icon: Icon, label }: { to: string; icon: any; label: string }) => (
   <NavLink
@@ -27,7 +28,8 @@ export default function AppLayout() {
   const { user, logout, sidebarOpen, toggleSidebar } = useStore();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try { await apiClient.post("/auth/logout"); } catch { /* Clear local auth even when offline. */ }
     logout();
     navigate("/login");
   };

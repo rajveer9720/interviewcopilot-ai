@@ -8,6 +8,9 @@ venv/
 .venv/
 env/
 ENV/
+.tools/
+.python/
+.cache/
 
 __pycache__/
 *.py[cod]

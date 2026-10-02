@@ -36,6 +36,7 @@ export function createOverlayWindow(): BrowserWindow {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      backgroundThrottling: false,
     },
   });
 
@@ -47,10 +48,7 @@ export function createOverlayWindow(): BrowserWindow {
   if (isDev) {
     overlayWindow.loadURL("http://localhost:5173/overlay");
   } else {
-    overlayWindow.loadFile(
-      path.join(__dirname, "..", "..", "resources", "frontend", "index.html"),
-      { hash: "/overlay" }
-    );
+    overlayWindow.loadURL("app://interviewcopilot/index.html#/overlay");
   }
 
   overlayWindow.on("closed", () => {

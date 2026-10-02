@@ -5,6 +5,7 @@ Matches a detected interview question type to the relevant sections of a
 candidate's active resume, so the LLM coaching prompt can be personalized.
 """
 
+import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,7 +38,7 @@ class ResumeContextEngine:
     async def _get_active_resume(self, db: AsyncSession, user_id: str) -> Resume | None:
         result = await db.execute(
             select(Resume)
-            .where(Resume.user_id == user_id, Resume.is_active.is_(True))
+            .where(Resume.user_id == uuid.UUID(str(user_id)), Resume.is_active.is_(True))
             .order_by(Resume.created_at.desc())
             .limit(1)
         )

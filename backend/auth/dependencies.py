@@ -1,5 +1,6 @@
 """Auth dependency — get_current_user from JWT Bearer token."""
 
+import uuid
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +18,10 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db),
 ) -> User:
     payload = decode_access_token(credentials.credentials)
-    user_id = payload.get("sub")
+    try:
+        user_id = uuid.UUID(payload["sub"])
+    except (KeyError, ValueError, TypeError):
+        raise HTTPException(status_code=401, detail="Invalid token subject")
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()

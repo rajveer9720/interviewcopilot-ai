@@ -65,7 +65,11 @@ const api: ElectronAPI = {
   closeOverlay: () => ipcRenderer.invoke("overlay:close"),
   toggleOverlay: () => ipcRenderer.invoke("overlay:toggle"),
   pushOverlayUpdate: (data) => ipcRenderer.send("overlay:push", data),
-  onOverlayUpdate: (cb) => createListener("overlay:push", cb),
+  onOverlayUpdate: (cb) => {
+    const unsubscribe = createListener("overlay:push", cb);
+    ipcRenderer.send("overlay:ready");
+    return unsubscribe;
+  },
 
   // Meeting detection
   onMeetingDetected: (cb) => createListener("meeting:detected", cb),

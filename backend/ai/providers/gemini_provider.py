@@ -31,20 +31,18 @@ class GeminiProvider(LLMProvider):
 
         if stream:
             async def _stream_tokens() -> AsyncGenerator[str, None]:
-                response = await asyncio.to_thread(
-                    self._model.generate_content,
+                response = await self._model.generate_content_async(
                     prompt,
                     generation_config=generation_config,
                     stream=True,
                 )
-                for chunk in response:
+                async for chunk in response:
                     if chunk.text:
                         yield chunk.text
 
             return _stream_tokens()
         else:
-            response = await asyncio.to_thread(
-                self._model.generate_content,
+            response = await self._model.generate_content_async(
                 prompt,
                 generation_config=generation_config,
             )

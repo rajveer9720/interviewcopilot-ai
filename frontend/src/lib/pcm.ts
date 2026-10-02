@@ -10,7 +10,7 @@ export class PcmStreamer {
   private processor: ScriptProcessorNode;
   private readonly targetSampleRate = 16_000;
 
-  constructor(streams: MediaStream[], onChunk: (pcm16: Int16Array) => void) {
+  constructor(streams: MediaStream[], onChunk: (pcm16: Int16Array) => void, onLevel?: (level: number) => void) {
     this.ctx = new AudioContext();
     this.merger = this.ctx.createGain();
 
@@ -34,12 +34,22 @@ export class PcmStreamer {
 
     this.processor.onaudioprocess = (e) => {
       const input = e.inputBuffer.getChannelData(0);
+      if (onLevel) {
+        let energy = 0;
+        for (const sample of input) energy += sample * sample;
+        onLevel(Math.min(1, Math.sqrt(energy / input.length) * 4));
+      }
       const downsampled = downsample(input, this.ctx.sampleRate, this.targetSampleRate);
       onChunk(floatTo16BitPCM(downsampled));
     };
   }
 
+  async resume() {
+    await this.ctx.resume();
+  }
+
   stop() {
+    this.processor.onaudioprocess = null;
     this.processor.disconnect();
     this.merger.disconnect();
     this.sources.forEach((s) => s.disconnect());

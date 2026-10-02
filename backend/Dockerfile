@@ -28,9 +28,9 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/health')" || exit 1
+    CMD python -c "import httpx; httpx.get('http://localhost:8000/ready').raise_for_status()" || exit 1
 
 # Run application — `python -m uvicorn` (rather than the bare `uvicorn` entry
 # point) ensures the working directory (/app, containing the `backend` package)
 # is added to sys.path, so `backend.main:app` resolves.
-CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--ws-max-size", "100000"]

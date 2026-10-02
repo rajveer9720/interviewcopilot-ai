@@ -9,7 +9,7 @@
  * (see SessionPage's handleWsMessage -> electronAPI.pushOverlayUpdate).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Mic } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -29,13 +29,24 @@ export default function OverlayPage() {
   const [aiStatus, setAiStatus] = useState<"idle" | "thinking">("idle");
   const [currentSuggestion, setCurrentSuggestion] = useState("");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [connection, setConnection] = useState("connected");
+  const [error, setError] = useState("");
+  const requestId = useRef<string | null>(null);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--overlay-drag", "drag");
 
     const unsubscribe = window.electronAPI?.onOverlayUpdate((msg: any) => {
-      console.info("[InterviewCopilot][Overlay] received", msg.type, msg);
       switch (msg.type) {
+        case "reset":
+          setIsCapturing(false);
+          setLatestTranscript(null);
+          setSuggestions([]);
+          setCurrentSuggestion("");
+          setAiStatus("idle");
+          setError("");
+          requestId.current = null;
+          break;
         case "capturing":
           setIsCapturing(!!msg.value);
           break;
@@ -45,21 +56,33 @@ export default function OverlayPage() {
           }
           break;
         case "question_detected":
+          requestId.current = msg.request_id;
+          setCurrentSuggestion("");
+          setError("");
           setAiStatus("thinking");
           break;
         case "ai_suggestion":
+          if (msg.request_id !== requestId.current) break;
           setAiStatus("idle");
           setCurrentSuggestion((prev) => prev + msg.token);
           break;
         case "ai_complete":
-          setCurrentSuggestion((prev) => {
-            if (prev) {
-              setSuggestions((s) => [...s, { text: prev, timestamp: new Date().toISOString() }]);
-            }
-            return "";
-          });
+          if (msg.request_id !== requestId.current) break;
+          setSuggestions([{ text: msg.full_text, timestamp: new Date().toISOString() }]);
+          setCurrentSuggestion("");
+          setAiStatus("idle");
+          break;
+        case "connected":
+          setConnection("connected");
+          break;
+        case "connection":
+          setConnection(msg.value);
+          setCurrentSuggestion("");
+          setAiStatus("idle");
           break;
         case "error":
+          setError(msg.message || "Could not process question");
+          setCurrentSuggestion("");
           setAiStatus("idle");
           break;
       }
@@ -78,6 +101,11 @@ export default function OverlayPage() {
     >
       {/* Overlay Container */}
       <div className="fixed inset-0 p-3 flex flex-col gap-2 pointer-events-none">
+        {(error || connection !== "connected") && (
+          <div role="status" className="text-xs text-white bg-error/80 rounded-lg p-2">
+            {error || "Connection lost — reconnecting. Some audio may be missed."}
+          </div>
+        )}
         {/* Session indicator */}
         <div className="flex items-center gap-2 self-end shrink-0">
           <div

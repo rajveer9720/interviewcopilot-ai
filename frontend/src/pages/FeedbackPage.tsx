@@ -32,21 +32,30 @@ export default function FeedbackPage() {
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let polls = 0;
+    setPending(false);
+    setLoading(true);
     const load = async () => {
       try {
         const { data } = await apiClient.get(`/feedback/sessions/${id}/feedback`);
+        if (disposed) return;
         if (data.status === "pending") {
-          setPending(true);
-          setTimeout(load, 3000);  // poll every 3s
+          setPending(++polls < 40);
+          if (polls < 40) timer = setTimeout(load, 3000);
         } else {
+          setPending(false);
           setFeedback(data);
         }
       } catch {
+        if (!disposed) setPending(false);
       } finally {
-        setLoading(false);
+        if (!disposed) setLoading(false);
       }
     };
     load();
+    return () => { disposed = true; clearTimeout(timer); };
   }, [id]);
 
   if (loading) {

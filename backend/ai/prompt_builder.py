@@ -19,9 +19,9 @@ Interview Question (Behavioral):
 Candidate's Relevant Background:
 {resume_context}
 
-Coach this candidate on how to answer this question effectively using the STAR method
-(Situation, Task, Action, Result). Provide a practical framework with 3 key points to cover.
-Keep your coaching under 200 words.
+Write a directly usable sample answer using the STAR method
+(Situation, Task, Action, Result). Use only documented experience; do not invent achievements.
+Keep the answer under 200 words.
 """
 
 TECHNICAL_TEMPLATE = """
@@ -31,9 +31,9 @@ Interview Question (Technical):
 Candidate's Technical Background:
 {resume_context}
 
-Coach this candidate on how to structure their technical answer. 
-Include: key concepts to cover, common pitfalls to avoid, and how to demonstrate depth.
-Keep your coaching under 200 words.
+Answer the technical question directly and accurately.
+Start with the core answer, then a brief explanation and relevant example.
+Keep the answer under 200 words.
 """
 
 GENERAL_TEMPLATE = """
@@ -43,8 +43,8 @@ Interview Question:
 Candidate Background:
 {resume_context}
 
-Provide structured coaching on how to answer this effectively.
-Keep your coaching under 200 words.
+Provide a concise, direct sample answer.
+Keep the answer under 200 words.
 """
 
 TEMPLATES = {
@@ -83,7 +83,11 @@ class PromptBuilder:
     async def _get_resume_context(self, user_id: str, question_type: str) -> str | None:
         redis_client = get_redis()
         cache_key = f"resume_context:{user_id}:{question_type}"
-        cached = await redis_client.get(cache_key)
+        try:
+            cached = await redis_client.get(cache_key)
+        except Exception:
+            cached = None
+            logger.warning("Resume cache unavailable", exc_info=True)
         if cached:
             return cached
 
@@ -91,5 +95,8 @@ class PromptBuilder:
             context = await self.context_engine.build_context(db, user_id, question_type)
 
         if context:
-            await redis_client.setex(cache_key, RESUME_CONTEXT_CACHE_TTL_SECONDS, context)
+            try:
+                await redis_client.setex(cache_key, RESUME_CONTEXT_CACHE_TTL_SECONDS, context)
+            except Exception:
+                logger.warning("Resume cache write failed", exc_info=True)
         return context

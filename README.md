@@ -1,5 +1,10 @@
 # InterviewCopilot AI
 
+For the current implementation, Windows build instructions, and verified MVP
+behavior, see [MVP release notes](MVP_RELEASE.md). The architecture material below
+also includes planned features and older Stripe/S3 examples; the current code
+uses Razorpay and Google Cloud Storage.
+
 > AI-powered Interview Practice & Live Meeting Assistant for Software Engineers
 
 **Ethical AI coaching tool — Built for learning, practice, and skill improvement.**

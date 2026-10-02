@@ -177,7 +177,7 @@ export default function SettingsPage() {
         </SettingRow>
         <SettingRow
           label="Capture System Audio"
-          description="Captures Zoom, Teams, and Meet audio (Windows only)"
+          description="Listen to meeting audio on Windows desktop. Other computer sounds may also be captured."
         >
           <label className="relative inline-flex items-center cursor-pointer">
             <input
@@ -191,7 +191,7 @@ export default function SettingsPage() {
         </SettingRow>
         <SettingRow
           label="Listen to My Microphone"
-          description="Turn off for practice mode — only system audio (the interviewer's voice) is transcribed, your own voice is ignored"
+          description="Off by default: listen to meeting audio only. Enable to also transcribe your microphone. Restart listening after changes."
         >
           <label className="relative inline-flex items-center cursor-pointer">
             <input

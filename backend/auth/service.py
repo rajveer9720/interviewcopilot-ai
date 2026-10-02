@@ -1,5 +1,6 @@
 """Auth domain — business logic service."""
 
+import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import HTTPException, status
@@ -58,9 +59,9 @@ class AuthService:
 
     async def get_user_by_id(self, user_id: str) -> User:
         result = await self.db.execute(
-            select(User).where(User.id == user_id)
+            select(User).where(User.id == uuid.UUID(str(user_id)))
         )
         user = result.scalar_one_or_none()
-        if not user:
+        if not user or not user.is_active:
             raise HTTPException(status_code=404, detail="User not found.")
         return user

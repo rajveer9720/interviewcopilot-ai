@@ -1,280 +1,278 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useStore } from "../store";
-import { apiClient, createSessionWebSocket } from "../api/client";
+import { apiClient, createSessionWebSocket, refreshAccessToken } from "../api/client";
 import { PcmStreamer, int16ToBase64 } from "../lib/pcm";
-import { Square, Mic, MicOff, Pause, Play } from "lucide-react";
+import { Square, Mic, MicOff } from "lucide-react";
 import { clsx } from "clsx";
 import toast from "react-hot-toast";
 
-const MAX_RECONNECT_ATTEMPTS = 5;
-
-// A close is only "intentional" if the exact socket instance that closed was
-// the one we asked to close — a ref shared across reconnects/StrictMode
-// remounts can't tell that apart from a real drop, since the old socket's
-// close event can land after a new effect run already reset it.
 type TaggedWebSocket = WebSocket & { intentionalClose?: boolean };
 
 export default function SessionPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const {
-    session, sessionStatus, transcripts, aiSuggestions, currentSuggestion,
-    isCapturing, audioLevel,
-    addTranscript, appendSuggestionToken, finalizeSuggestion, endSession,
-    setCapturing, setAudioLevel,
-  } = useStore();
-
+  const { session, transcripts, aiSuggestions, currentSuggestion, isCapturing, audioLevel,
+    addTranscript, appendSuggestionToken, finalizeSuggestion, setCapturing, setAudioLevel } = useStore();
   const [aiStatus, setAiStatus] = useState<"idle" | "thinking">("idle");
+  const [connectionStatus, setConnectionStatus] = useState("connecting");
+  const [starting, setStarting] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const [sourceLabel, setSourceLabel] = useState("");
   const wsRef = useRef<TaggedWebSocket | null>(null);
   const pcmRef = useRef<PcmStreamer | null>(null);
   const streamsRef = useRef<MediaStream[]>([]);
-  const levelCtxRef = useRef<AudioContext | null>(null);
-  const reconnectAttemptRef = useRef(0);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isUnmountedRef = useRef(false);
-  const audioChunkCountRef = useRef(0);
+  const pendingAudioRef = useRef<Int16Array[]>([]);
+  const pendingSamplesRef = useRef(0);
+  const captureSourceRef = useRef("system");
+  const activeRequestRef = useRef<string | null>(null);
+  const endAckRef = useRef<(() => void) | null>(null);
+  const captureStartingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const endingRef = useRef(false);
+  const authenticatedRef = useRef(false);
 
   const handleWsMessage = useCallback((event: MessageEvent) => {
-    const msg = JSON.parse(event.data);
-    console.info("[InterviewCopilot][WS] received", msg.type, msg);
-    // Mirror every event to the overlay window — it runs in its own renderer
-    // with its own store instance, so it can't see this component's state.
+    let msg: any;
+    try { msg = JSON.parse(event.data); } catch { return; }
     window.electronAPI?.pushOverlayUpdate(msg);
-
     switch (msg.type) {
       case "transcript":
-        if (msg.is_final) {
-          addTranscript({
-            session_id: id!,
-            speaker:    msg.speaker || "user",
-            content:    msg.text,
-            confidence: msg.confidence ?? null,
-            is_question: !!msg.is_question,
-            created_at: new Date().toISOString(),
-          });
-        }
+        if (msg.is_final) addTranscript({ session_id: id!, speaker: msg.speaker || "interviewer",
+          content: msg.text, confidence: msg.confidence ?? null, is_question: !!msg.is_question,
+          created_at: new Date().toISOString() });
         break;
       case "question_detected":
+        activeRequestRef.current = msg.request_id;
+        useStore.setState({ currentSuggestion: "", currentProvider: "" });
         setAiStatus("thinking");
         break;
       case "ai_suggestion":
+        if (msg.request_id !== activeRequestRef.current) break;
         setAiStatus("idle");
-        appendSuggestionToken(msg.token, msg.provider || "openai");
+        appendSuggestionToken(msg.token, msg.provider);
         break;
       case "ai_complete":
-        console.info("[InterviewCopilot][AI] complete", {
-          chars: msg.full_text?.length ?? 0,
-        });
+        if (msg.request_id !== activeRequestRef.current) break;
+        useStore.setState({ currentSuggestion: msg.full_text, currentProvider: msg.provider });
         finalizeSuggestion();
+        activeRequestRef.current = null;
+        setAiStatus("idle");
+        break;
+      case "session_ended":
+        endAckRef.current?.();
         break;
       case "error":
-        console.error("[InterviewCopilot][WS] server error", msg.message);
         setAiStatus("idle");
-        toast.error(msg.message || "WebSocket error");
+        useStore.setState({ currentSuggestion: "" });
+        toast.error(msg.message || "Could not process audio");
         break;
     }
   }, [id, addTranscript, appendSuggestionToken, finalizeSuggestion]);
 
-  const connectWebSocket = useCallback(() => {
-    const token = useStore.getState().accessToken;
-    if (!id || !token) return;
-
-    const ws = createSessionWebSocket(id, token) as TaggedWebSocket;
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      console.info("[InterviewCopilot][WS] connected", { sessionId: id });
-      reconnectAttemptRef.current = 0;
+  useEffect(() => {
+    mountedRef.current = true;
+    let disposed = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let lastMessage = Date.now();
+    if (useStore.getState().session?.id !== id) {
+      useStore.setState({ transcripts: [], aiSuggestions: [], currentSuggestion: "" });
+    }
+    window.electronAPI?.pushOverlayUpdate({ type: "reset" });
+    const connect = () => {
+      if (disposed || !id) return;
+      const token = useStore.getState().accessToken;
+      if (!token) { setConnectionStatus("Sign in to reconnect"); return; }
+      setConnectionStatus(attempts ? "reconnecting" : "connecting");
+      authenticatedRef.current = false;
+      const ws = createSessionWebSocket(id) as TaggedWebSocket;
+      wsRef.current = ws;
+      ws.onopen = () => {
+        lastMessage = Date.now();
+        ws.send(JSON.stringify({ type: "authenticate", token }));
+      };
+      ws.onmessage = (event) => {
+        if (disposed || ws !== wsRef.current) return;
+        lastMessage = Date.now();
+        let msg: any;
+        try { msg = JSON.parse(event.data); } catch { return; }
+        if (msg.type === "connected") {
+          authenticatedRef.current = true;
+          attempts = 0;
+          setConnectionStatus("connected");
+          ws.send(JSON.stringify({ type: "capture_config", source: captureSourceRef.current }));
+          for (const pcm of pendingAudioRef.current) ws.send(JSON.stringify({ type: "audio_chunk", data: int16ToBase64(pcm) }));
+          pendingAudioRef.current = [];
+          pendingSamplesRef.current = 0;
+        }
+        handleWsMessage(event);
+      };
+      ws.onclose = async (event) => {
+        authenticatedRef.current = false;
+        if (disposed || ws.intentionalClose || event.code === 1000) return;
+        toast.error("Connection lost. Please repeat any unfinished question after reconnecting.");
+        setConnectionStatus("reconnecting");
+        setAiStatus("idle");
+        activeRequestRef.current = null;
+        useStore.setState({ currentSuggestion: "" });
+        window.electronAPI?.pushOverlayUpdate({ type: "connection", value: "reconnecting" });
+        if (event.code === 4003) {
+          setConnectionStatus("Session unavailable ? start a new session");
+          return;
+        }
+        if (++attempts > 5) {
+          setConnectionStatus("Disconnected ? reopen this session to retry");
+          toast.error("Connection lost. Listening cannot reach the server.");
+          return;
+        }
+        if (event.code === 4001 || event.code === 1006) {
+          try {
+            const refreshedToken = await refreshAccessToken();
+            useStore.getState().setAccessToken(refreshedToken);
+          } catch {
+            if (event.code === 4001) { setConnectionStatus("Sign in to reconnect"); return; }
+          }
+        }
+        if (!disposed) timer = setTimeout(connect, Math.min(1000 * 2 ** (attempts - 1), 10000));
+      };
     };
-
-    ws.onmessage = handleWsMessage;
-
-    ws.onerror = (event) => {
-      console.error("[InterviewCopilot][WS] connection error", event);
-    };
-
-    ws.onclose = (event) => {
-      console.warn("[InterviewCopilot][WS] closed", {
-        code: event.code,
-        reason: event.reason,
-        wasClean: event.wasClean,
-      });
-      if (ws.intentionalClose || event.code === 1000) return;
-      scheduleReconnect();
+    connect();
+    heartbeat = setInterval(() => {
+      if (endingRef.current) return;
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        if (Date.now() - lastMessage > 35000) ws.close();
+        else ws.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 10000);
+    apiClient.get(`/sessions/${id}`).then(({ data }) => {
+      if (!disposed) useStore.setState({ session: data, sessionStatus: data.status === "active" ? "active" : "ended" });
+    }).catch(() => { if (!disposed) toast.error("Could not load session"); });
+    return () => {
+      disposed = true;
+      mountedRef.current = false;
+      clearTimeout(timer);
+      clearInterval(heartbeat);
+      const ws = wsRef.current;
+      if (ws) { ws.intentionalClose = true; ws.close(); }
     };
   }, [id, handleWsMessage]);
-
-  const scheduleReconnect = useCallback(async () => {
-    if (isUnmountedRef.current) return;
-
-    const attempt = reconnectAttemptRef.current + 1;
-    if (attempt > MAX_RECONNECT_ATTEMPTS) {
-      toast.error("Lost connection to the server. Please refresh the page.");
-      return;
-    }
-    reconnectAttemptRef.current = attempt;
-    toast.error(`Connection lost. Reconnecting... (${attempt}/${MAX_RECONNECT_ATTEMPTS})`);
-
-    // The socket may have dropped because the access token expired — refresh it
-    // before retrying so the reconnect doesn't just fail the same way again.
-    try {
-      const { data } = await apiClient.post("/auth/refresh");
-      useStore.getState().setAccessToken(data.access_token);
-    } catch {
-      // Keep the existing token; the server will reject it again if it's the
-      // real problem, which re-enters this same retry loop.
-    }
-
-    if (isUnmountedRef.current) return;
-
-    const delay = Math.min(1000 * 2 ** (attempt - 1), 10_000);
-    reconnectTimerRef.current = setTimeout(connectWebSocket, delay);
-  }, [connectWebSocket]);
-
-  // ── Connect WebSocket ──────────────────────────────────────
-  useEffect(() => {
-    isUnmountedRef.current = false;
-    reconnectAttemptRef.current = 0;
-    connectWebSocket();
-
-    return () => {
-      isUnmountedRef.current = true;
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      if (wsRef.current) {
-        wsRef.current.intentionalClose = true;
-        wsRef.current.close();
-      }
-    };
-  }, [connectWebSocket]);
-
-  // ── Start Audio Capture ────────────────────────────────────
-  // Sends raw 16-bit/16kHz/mono PCM over the WebSocket — the format
-  // backend/transcripts/whisper_client.py expects. In Electron, system audio
-  // (Zoom/Teams/Meet output) is captured too via Chromium's built-in desktop
-  // loopback support, so questions asked by the interviewer get transcribed
-  // and coached, not just what the user says into the mic.
-  const startCapture = useCallback(async () => {
-    try {
-      const micEnabled = useStore.getState().micEnabled;
-      const streams: MediaStream[] = [];
-      let micStream: MediaStream | null = null;
-
-      if (micEnabled) {
-        console.info("[InterviewCopilot][Audio] requesting microphone");
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        streams.push(micStream);
-      } else {
-        console.info("[InterviewCopilot][Audio] microphone disabled — practice mode, system audio only");
-      }
-
-      const sourceId = useStore.getState().captureSystemAudio
-        ? await window.electronAPI?.getDesktopAudioSourceId().catch(() => null)
-        : null;
-      let systemStream: MediaStream | null = null;
-      if (sourceId) {
-        try {
-          systemStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              // @ts-expect-error — non-standard Electron desktop-capture constraints
-              mandatory: { chromeMediaSource: "desktop" },
-            },
-            video: {
-              // @ts-expect-error — a (unused, discarded) video track is required
-              // to unlock Chromium's desktop-capture audio path.
-              mandatory: { chromeMediaSource: "desktop", chromeMediaSourceId: sourceId },
-            },
-          });
-          systemStream.getVideoTracks().forEach((t) => t.stop());
-          streams.push(systemStream);
-        } catch {
-          // System audio is a bonus, not a requirement — keep going with what we have.
-        }
-      }
-
-      if (streams.length === 0) {
-        toast.error("No audio source enabled — turn on your microphone or system audio in Settings.");
-        return;
-      }
-
-      streamsRef.current = streams;
-
-      // Audio level visualization — reflects whichever source is actually
-      // being listened to (mic, or system audio in practice mode).
-      const levelCtx = new AudioContext();
-      levelCtxRef.current = levelCtx;
-      const source = levelCtx.createMediaStreamSource(micStream || systemStream!);
-      const analyser = levelCtx.createAnalyser();
-      source.connect(analyser);
-      const data = new Uint8Array(analyser.frequencyBinCount);
-      const tick = () => {
-        analyser.getByteFrequencyData(data);
-        const avg = data.reduce((a, b) => a + b, 0) / data.length;
-        setAudioLevel(avg / 255);
-        if (useStore.getState().isCapturing) requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-
-      pcmRef.current = new PcmStreamer(streams, (pcm16) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          audioChunkCountRef.current += 1;
-          if (audioChunkCountRef.current % 10 === 0) {
-            console.debug("[InterviewCopilot][Audio] chunks sent", audioChunkCountRef.current);
-          }
-          wsRef.current.send(
-            JSON.stringify({ type: "audio_chunk", data: int16ToBase64(pcm16) })
-          );
-        } else if (audioChunkCountRef.current === 0) {
-          console.warn("[InterviewCopilot][Audio] socket is not open; chunk not sent", {
-            readyState: wsRef.current?.readyState,
-          });
-        }
-      });
-
-      setCapturing(true);
-      console.info("[InterviewCopilot][Audio] capture started", {
-        streams: streams.length,
-        socketState: wsRef.current?.readyState,
-        socketUrlState: wsRef.current
-          ? ["CONNECTING", "OPEN", "CLOSING", "CLOSED"][wsRef.current.readyState]
-          : "MISSING",
-      });
-      await window.electronAPI?.openOverlay();
-      window.electronAPI?.pushOverlayUpdate({ type: "capturing", value: true });
-    } catch (error) {
-      console.error("[InterviewCopilot][Audio] capture failed", error);
-      toast.error("Could not access microphone.");
-    }
-  }, []);
 
   const stopCapture = useCallback(() => {
     pcmRef.current?.stop();
     pcmRef.current = null;
     streamsRef.current.forEach((s) => s.getTracks().forEach((t) => t.stop()));
     streamsRef.current = [];
-    levelCtxRef.current?.close();
-    levelCtxRef.current = null;
+    pendingAudioRef.current = [];
+    pendingSamplesRef.current = 0;
     setCapturing(false);
     setAudioLevel(0);
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "audio_pause" }));
     window.electronAPI?.pushOverlayUpdate({ type: "capturing", value: false });
-    window.electronAPI?.closeOverlay();
-  }, []);
+  }, [setCapturing, setAudioLevel]);
 
-  // Stop mic/system-audio tracks if the user navigates away without hitting "End".
-  useEffect(() => {
-    return () => {
-      pcmRef.current?.stop();
-      streamsRef.current.forEach((s) => s.getTracks().forEach((t) => t.stop()));
-      levelCtxRef.current?.close();
-    };
-  }, []);
+  const startCapture = useCallback(async () => {
+    if (captureStartingRef.current || pcmRef.current) return;
+    if (wsRef.current?.readyState !== WebSocket.OPEN) { toast.error("Wait for the server connection"); return; }
+    captureStartingRef.current = true;
+    setStarting(true);
+    const streams: MediaStream[] = [];
+    try {
+      const { micEnabled, captureSystemAudio } = useStore.getState();
+      if (!micEnabled && !captureSystemAudio) throw new Error("Enable meeting audio or your microphone in Settings.");
+      if (captureSystemAudio) {
+        if (!window.electronAPI || window.electronAPI.platform !== "win32") {
+          throw new Error("Meeting audio requires the Windows desktop app. For browser practice, disable system audio and enable microphone in Settings.");
+        }
+        const sourceId = await window.electronAPI.getDesktopAudioSourceId();
+        if (!sourceId) throw new Error("No desktop audio source found. Check your playback device and retry.");
+        const system = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            // @ts-expect-error Electron desktop loopback constraints
+            mandatory: { chromeMediaSource: "desktop" },
+          },
+          video: {
+            // @ts-expect-error Electron requires a desktop video source for loopback
+            mandatory: { chromeMediaSource: "desktop", chromeMediaSourceId: sourceId },
+          },
+        });
+        streams.push(system);
+        system.getVideoTracks().forEach((t) => t.stop());
+        if (!system.getAudioTracks().some((t) => t.readyState === "live")) {
+          throw new Error("Meeting audio is unavailable. Check the output device and retry.");
+        }
+      }
+      if (micEnabled) streams.push(await navigator.mediaDevices.getUserMedia({ audio: true }));
+      if (!mountedRef.current) { streams.forEach((s) => s.getTracks().forEach((t) => t.stop())); return; }
+      await window.electronAPI?.openOverlay();
+      if (!mountedRef.current || wsRef.current?.readyState !== WebSocket.OPEN) throw new Error("Connection changed. Please retry listening.");
+      captureSourceRef.current = captureSystemAudio && !micEnabled ? "system" : "mixed";
+      setSourceLabel(captureSourceRef.current === "system" ? "Meeting audio only ? microphone off" : captureSystemAudio ? "Meeting audio + microphone" : "Microphone only");
+      wsRef.current.send(JSON.stringify({ type: "capture_config", source: captureSourceRef.current }));
+      streamsRef.current = streams;
+      for (const stream of streams) for (const track of stream.getAudioTracks()) {
+        track.addEventListener("ended", () => { stopCapture(); toast.error("Audio device disconnected. Check your device and restart listening."); }, { once: true });
+      }
+      let warned = false;
+      pcmRef.current = new PcmStreamer(streams, (pcm) => {
+        const ws = wsRef.current;
+        if (authenticatedRef.current && ws?.readyState === WebSocket.OPEN && ws.bufferedAmount < 256000) {
+          for (const pending of pendingAudioRef.current) {
+            ws.send(JSON.stringify({ type: "audio_chunk", data: int16ToBase64(pending) }));
+          }
+          pendingAudioRef.current = [];
+          pendingSamplesRef.current = 0;
+          ws.send(JSON.stringify({ type: "audio_chunk", data: int16ToBase64(pcm) }));
+        } else {
+          pendingAudioRef.current.push(pcm.slice());
+          pendingSamplesRef.current += pcm.length;
+          while (pendingSamplesRef.current > 80000) {
+            pendingSamplesRef.current -= pendingAudioRef.current.shift()!.length;
+            if (!warned) { toast.error("Connection is slow. Some audio was missed; please repeat the question after reconnecting."); warned = true; }
+          }
+        }
+      }, setAudioLevel);
+      await pcmRef.current.resume();
+      setCapturing(true);
+      window.electronAPI?.pushOverlayUpdate({ type: "capturing", value: true });
+    } catch (error) {
+      streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
+      stopCapture();
+      toast.error(error instanceof Error ? error.message : "Could not start audio capture");
+    } finally {
+      captureStartingRef.current = false;
+      if (mountedRef.current) setStarting(false);
+    }
+  }, [setCapturing, setAudioLevel, stopCapture]);
+
+  useEffect(() => () => { stopCapture(); window.electronAPI?.closeOverlay(); }, [stopCapture]);
 
   const handleEndSession = async () => {
+    if (ending) return;
+    setEnding(true);
+    endingRef.current = true;
     stopCapture();
-    wsRef.current?.send(JSON.stringify({ type: "session_end" }));
-    await endSession();
-    await apiClient.post(`/feedback/sessions/${id}/feedback/generate`);
-    navigate(`/feedback/${id}`);
+    try {
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => { endAckRef.current = null; reject(new Error("Pending processing did not finish. Please retry ending the session.")); }, 60000);
+          endAckRef.current = () => { clearTimeout(timer); endAckRef.current = null; resolve(); };
+          ws.send(JSON.stringify({ type: "session_end" }));
+        });
+      } else {
+        await apiClient.post(`/sessions/${id}/end`);
+      }
+      useStore.setState({ sessionStatus: "ended" });
+      await apiClient.post(`/feedback/sessions/${id}/feedback/generate`);
+      await window.electronAPI?.closeOverlay();
+      navigate(`/feedback/${id}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not finish session. Please retry.");
+    } finally { endingRef.current = false; setEnding(false); }
   };
 
   const latestSuggestion = currentSuggestion || aiSuggestions[aiSuggestions.length - 1]?.text;
@@ -297,13 +295,15 @@ export default function SessionPage() {
               )}
             />
             <button
+              disabled={starting || ending || connectionStatus !== "connected"}
               onClick={isCapturing ? stopCapture : startCapture}
               className="flex items-center gap-1 px-3 py-1.5 rounded text-xs bg-surface-2 hover:bg-border text-primary transition-colors"
             >
               {isCapturing ? <MicOff size={12} /> : <Mic size={12} />}
-              {isCapturing ? "Mute" : "Unmute"}
+              {isCapturing ? "Pause listening" : "Start listening"}
             </button>
             <button
+              disabled={ending}
               onClick={handleEndSession}
               className="flex items-center gap-1 px-3 py-1.5 rounded text-xs bg-error/10 hover:bg-error/20 text-error transition-colors"
             >
@@ -312,6 +312,13 @@ export default function SessionPage() {
           </div>
         </div>
 
+        <div role="status" className="px-4 py-2 text-xs text-muted">
+          {connectionStatus === "connected" ? (isCapturing ? "Listening" : "Connected ? ready to listen") : connectionStatus}
+          {isCapturing && ` ? ${sourceLabel}`}
+          {starting && " ? Starting audio..."}
+          {ending && " ? Finishing pending answers..."}
+          {connectionStatus !== "connected" && isCapturing && " ? Audio buffered for up to 5 seconds"}
+        </div>
         {/* Audio level bar */}
         {isCapturing && (
           <div className="h-0.5 bg-surface">
@@ -327,7 +334,7 @@ export default function SessionPage() {
           {transcripts.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <Mic size={32} className="text-muted mb-3" />
-              <p className="text-sm text-muted">Start speaking to begin transcription</p>
+              <p className="text-sm text-muted">Play meeting audio to begin transcription</p>
               <p className="text-xs text-muted/60 mt-1">AI coaching will appear when questions are detected</p>
             </div>
           )}
@@ -361,10 +368,11 @@ export default function SessionPage() {
         {!isCapturing && (
           <div className="px-4 pb-4">
             <button
+              disabled={starting || ending || connectionStatus !== "connected"}
               onClick={startCapture}
               className="w-full py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2 transition-colors"
             >
-              <Mic size={16} /> Start Microphone Capture
+              <Mic size={16} /> Start Listening
             </button>
           </div>
         )}
@@ -373,7 +381,7 @@ export default function SessionPage() {
       {/* ── Right: AI Suggestion Panel ────────────────────── */}
       <div className="w-80 flex flex-col bg-surface">
         <div className="px-4 py-3 border-b border-border">
-          <p className="text-xs font-medium text-muted uppercase tracking-wider">AI Coaching</p>
+          <p className="text-xs font-medium text-muted uppercase tracking-wider">AI Answer</p>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">

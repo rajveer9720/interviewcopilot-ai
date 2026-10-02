@@ -1,5 +1,5 @@
 import React from "react";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, HashRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { useStore } from "./store";
 
@@ -68,8 +68,9 @@ function AppContent() {
 }
 
 export default function App() {
+  const Router = ["file:", "app:"].includes(window.location.protocol) ? HashRouter : BrowserRouter;
   return (
-    <BrowserRouter>
+    <Router>
       <Toaster
         position="top-right"
         toastOptions={{
@@ -81,6 +82,6 @@ export default function App() {
         }}
       />
       <AppContent />
-    </BrowserRouter>
+    </Router>
   );
 }

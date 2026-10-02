@@ -3,14 +3,15 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from uuid import UUID
+from typing import Literal
 
 
 class SessionCreateRequest(BaseModel):
-    mode: str               # practice | interview | review
+    mode: Literal["practice", "interview", "review"]
     title: str | None = None
     target_role: str | None = None
     target_company: str | None = None
-    resume_id: str | None = None
+    resume_id: UUID | None = None
 
 
 class SessionResponse(BaseModel):

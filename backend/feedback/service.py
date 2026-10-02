@@ -13,7 +13,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from backend.sessions.models import Session, Transcript
+from backend.sessions.models import Session, Transcript, AIResponse
 from backend.feedback.models import SessionFeedback
 from backend.auth.models import User
 from backend.ai.router import LLMRouter
@@ -37,7 +37,7 @@ class FeedbackService:
             raise ValueError(f"Session {session_id} not found")
 
         transcripts_result = await self.db.execute(
-            select(Transcript).where(Transcript.session_id == session_id)
+            select(Transcript).where(Transcript.session_id == session_id).order_by(Transcript.created_at)
         )
         transcripts = transcripts_result.scalars().all()
 
@@ -53,6 +53,12 @@ class FeedbackService:
             f"[{t.speaker or 'user'}]: {t.content}"
             for t in transcripts
         ])
+        if all(t.speaker == "interviewer" for t in transcripts):
+            answers = (await self.db.scalars(select(AIResponse).where(
+                AIResponse.session_id == session.id).order_by(AIResponse.created_at))).all()
+            transcript_text += "\nAI sample answers:\n" + "\n".join(a.response_text or "" for a in answers)
+            transcript_text = ("Only interviewer audio was captured. Evaluate the AI sample answers, "
+                "not the candidate's actual performance. Explicitly state this limitation in REPORT.\n" + transcript_text)
 
         # LLM-generated analysis
         prompt = self._build_feedback_prompt(transcript_text, session.target_role)

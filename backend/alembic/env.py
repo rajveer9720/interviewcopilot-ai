@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # below, which adds it relative to the working directory Alembic is run from
 # (the `backend/` directory, per convention: `cd backend && alembic ...`).
 from backend.core.database import Base  # noqa: F401
+from backend.config import settings
 import backend.auth.models  # noqa: F401
 import backend.sessions.models  # noqa: F401
 import backend.resume.models  # noqa: F401
@@ -25,7 +26,7 @@ import backend.billing.models  # noqa: F401
 config = context.config
 
 # Override sqlalchemy.url from environment variable
-database_url = os.environ.get("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
+database_url = os.environ.get("DATABASE_URL", settings.DATABASE_URL)
 # asyncpg requires the driver prefix
 if database_url and database_url.startswith("postgresql://"):
     database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)

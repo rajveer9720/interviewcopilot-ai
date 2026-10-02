@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from "electron";
+import { app, BrowserWindow } from "electron";
 import * as path from "path";
 
 const isDev = process.env.NODE_ENV === "development";
@@ -26,9 +26,7 @@ export function createMainWindow(): BrowserWindow {
     win.loadURL("http://localhost:5173");
     win.webContents.openDevTools({ mode: "detach" });
   } else {
-    win.loadFile(
-      path.join(__dirname, "..", "..", "resources", "frontend", "index.html")
-    );
+    win.loadURL("app://interviewcopilot/index.html");
   }
 
   // Excluded from screen capture too — session transcripts and the app name
@@ -40,7 +38,7 @@ export function createMainWindow(): BrowserWindow {
 
   win.on("close", (evt) => {
     // Minimise to tray instead of closing on Windows
-    if (process.platform === "win32") {
+    if (process.platform === "win32" && !(app as typeof app & { isQuitting?: boolean }).isQuitting) {
       evt.preventDefault();
       win.hide();
     }

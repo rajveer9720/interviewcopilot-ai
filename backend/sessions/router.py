@@ -1,5 +1,6 @@
 """Sessions domain — REST router."""
 
+from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,7 +36,7 @@ async def list_sessions(
 
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
-    session_id: str,
+    session_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -45,7 +46,7 @@ async def get_session(
 
 @router.post("/{session_id}/end", response_model=SessionResponse)
 async def end_session(
-    session_id: str,
+    session_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -55,12 +56,13 @@ async def end_session(
 
 @router.get("/{session_id}/transcripts", response_model=list[TranscriptResponse])
 async def get_transcripts(
-    session_id: str,
+    session_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     from sqlalchemy import select
     from backend.sessions.models import Transcript
+    await SessionService(db).get_session(session_id, str(current_user.id))
     result = await db.execute(
         select(Transcript).where(Transcript.session_id == session_id)
     )
