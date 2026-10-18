@@ -10,9 +10,11 @@ import { apiClient } from "../../api/client";
 const NavItem = ({ to, icon: Icon, label }: { to: string; icon: any; label: string }) => (
   <NavLink
     to={to}
+    title={label}
+    aria-label={label}
     className={({ isActive }) =>
       clsx(
-        "flex items-center gap-3 px-3 py-2 rounded text-sm font-medium transition-colors",
+        "flex items-center justify-center sm:justify-start gap-3 px-3 py-2 rounded text-sm font-medium transition-colors",
         isActive
           ? "bg-accent/15 text-accent"
           : "text-muted hover:text-primary hover:bg-surface-2"
@@ -20,7 +22,7 @@ const NavItem = ({ to, icon: Icon, label }: { to: string; icon: any; label: stri
     }
   >
     <Icon size={18} />
-    <span>{label}</span>
+    <span className="hidden sm:inline">{label}</span>
   </NavLink>
 );
 
@@ -39,8 +41,8 @@ export default function AppLayout() {
       {/* ── Sidebar ───────────────────────────────────────── */}
       <aside
         className={clsx(
-          "flex flex-col border-r border-border bg-surface transition-all duration-200",
-          sidebarOpen ? "w-56" : "w-14"
+          "flex shrink-0 flex-col border-r border-border bg-surface transition-all duration-200",
+          sidebarOpen ? "w-14 sm:w-56" : "w-14"
         )}
       >
         {/* Logo */}
@@ -49,7 +51,7 @@ export default function AppLayout() {
             <Mic size={14} className="text-white" />
           </div>
           {sidebarOpen && (
-            <span className="font-semibold text-sm leading-tight">
+            <span className="hidden sm:block font-semibold text-sm leading-tight">
               InterviewCopilot
               <span className="block text-[10px] text-muted font-normal">AI</span>
             </span>
@@ -76,6 +78,8 @@ export default function AppLayout() {
                 <NavLink
                   key={to}
                   to={to}
+                  title={String(to).slice(1)}
+                  aria-label={String(to).slice(1)}
                   className={({ isActive }) =>
                     clsx(
                       "flex items-center justify-center w-10 h-10 rounded transition-colors",
@@ -93,7 +97,7 @@ export default function AppLayout() {
         {/* User + Logout */}
         <div className="border-t border-border p-2 space-y-1">
           {sidebarOpen && (
-            <div className="px-3 py-2">
+            <div className="hidden sm:block min-w-0 px-3 py-2">
               <p className="text-xs text-primary truncate">{user?.email}</p>
               <span className="text-[10px] text-accent uppercase tracking-wider font-medium">
                 {user?.plan_tier}
@@ -101,25 +105,28 @@ export default function AppLayout() {
             </div>
           )}
           <button
+            title="Sign out"
+            aria-label="Sign out"
             onClick={handleLogout}
             className="flex items-center gap-3 w-full px-3 py-2 rounded text-sm text-muted hover:text-error hover:bg-error/10 transition-colors"
           >
             <LogOut size={18} />
-            {sidebarOpen && <span>Sign out</span>}
+            {sidebarOpen && <span className="hidden sm:inline">Sign out</span>}
           </button>
         </div>
 
         {/* Toggle */}
         <button
+          aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
           onClick={toggleSidebar}
-          className="flex items-center justify-center h-8 border-t border-border text-muted hover:text-primary transition-colors"
+          className="hidden sm:flex items-center justify-center h-8 border-t border-border text-muted hover:text-primary transition-colors"
         >
           {sidebarOpen ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
         </button>
       </aside>
 
       {/* ── Main Content ──────────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="min-w-0 flex-1 overflow-y-auto">
         <Outlet />
       </main>
     </div>

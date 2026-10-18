@@ -89,3 +89,44 @@ and refresh after the access token expires, and resume/payment flows with the
 configured services. Code signing requires a publisher certificate; local builds
 without one are unsigned. This repository does not claim these external checks
 or a signed release have been completed.
+
+
+## Guided practice (text-first)
+
+Practice setup now opens `/practice/:id`, a separate mock interviewer. Start asks
+one role/company-aware question; submitting a typed answer generates feedback,
+and Next asks a follow-up using the saved conversation. Up to ten questions are
+supported. Saved questions, answers and feedback reopen from Dashboard recent
+sessions. Unsubmitted drafts are not saved. Voice answers and overall mock
+interview scoring are not included in this step; individual feedback is shown
+in the practice page. Live Interview mode retains its existing audio workflow.
+
+Practice state uses existing AI response and transcript tables, with no schema
+migration. Authenticated GET/POST `/sessions/{id}/practice` require ownership.
+Model output is validated before saving. Provider failures keep the previous
+turn intact. Production session locks serialize advancement and session ending;
+SQLite tests do not verify PostgreSQL locking. Live provider quality and browser
+viewport checks still need manual verification.
+
+
+## Practice voice answers and overall review
+
+Guided practice now supports microphone recording using existing 16 kHz mono PCM
+capture. Clips stop at two minutes, are sent to the authenticated
+`POST /sessions/{id}/practice/transcribe?question_id=...` endpoint, and append an
+editable draft. Transcription never submits or scores an answer automatically.
+Capture stops on navigation or device disconnection. Failed transcription can be
+retried from the retained in-memory clip; recordings and unsubmitted drafts do
+not survive refresh. English and Hindi/Hinglish use the existing Whisper filter.
+
+Ending a practice with submitted answers requests a validated overall review.
+The completed practice page shows overall, answer clarity and technical scores,
+strengths, next focus areas and a report. Reviews persist in SessionFeedback and
+feed existing dashboard analytics. No vocal-confidence or personality score is
+inferred. Invalid provider output never produces fallback scores. A failed review
+can be retried without losing completed practice. Empty sessions are not scored.
+
+Nginx API body limits now accommodate clips and existing resume uploads. No DB
+migration is required. Live microphone permissions, actual devices, transcription
+quality and mobile viewport behavior require manual verification; automated tests
+use fake providers. No raw recording is stored by this application.

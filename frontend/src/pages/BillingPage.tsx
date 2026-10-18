@@ -82,7 +82,7 @@ export default function BillingPage() {
   const currentTier = user?.plan_tier || "free";
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
+    <div className="w-full min-w-0 p-4 sm:p-6 lg:p-8 xl:p-10">
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-primary">Billing & Plans</h1>
         <p className="text-sm text-muted mt-1">

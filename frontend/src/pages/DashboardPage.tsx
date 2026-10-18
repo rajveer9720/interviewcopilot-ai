@@ -136,7 +136,7 @@ export default function DashboardPage() {
             {data.recent_sessions.map((s) => (
               <Link
                 key={s.id}
-                to={`/feedback/${s.id}`}
+                to={s.mode === "practice" ? `/practice/${s.id}` : `/feedback/${s.id}`}
                 className="flex items-center justify-between px-4 py-3 hover:bg-surface-2 transition-colors"
               >
                 <div>

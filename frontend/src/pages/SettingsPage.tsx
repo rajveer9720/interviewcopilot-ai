@@ -70,7 +70,7 @@ export default function SettingsPage() {
   };
 
   const Section = ({ icon: Icon, title, children }: any) => (
-    <div className="bg-surface border border-border rounded-lg overflow-hidden mb-4">
+    <div className="min-w-0 h-full bg-surface border border-border rounded-xl overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
         <Icon size={15} className="text-muted" />
         <p className="text-sm font-medium text-primary">{title}</p>
@@ -80,30 +80,32 @@ export default function SettingsPage() {
   );
 
   const SettingRow = ({ label, description, children }: any) => (
-    <div className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0 border-b border-border last:border-0">
-      <div>
+    <div className="flex min-w-0 flex-col items-start gap-3 py-4 first:pt-0 last:pb-0 border-b border-border last:border-0 2xl:flex-row 2xl:items-center 2xl:justify-between">
+      <div className="min-w-0 flex-1">
         <p className="text-sm text-primary">{label}</p>
-        {description && <p className="text-xs text-muted mt-0.5">{description}</p>}
+        {description && <p className="text-xs leading-5 text-slate-400 mt-1 break-words">{description}</p>}
       </div>
-      {children}
+      <div className="w-full min-w-0 2xl:w-auto 2xl:max-w-[55%] 2xl:shrink-0">{children}</div>
     </div>
   );
 
   return (
-    <div className="p-6 max-w-2xl mx-auto">
+    <div className="w-full min-w-0 p-4 sm:p-6 lg:p-8 xl:p-10">
       <div className="mb-6">
-        <h1 className="text-xl font-semibold text-primary">Settings</h1>
+        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-primary">Settings</h1>
+        <p className="mt-2 text-sm text-slate-400">Manage your profile, resume and session preferences.</p>
       </div>
 
+      <div className="grid min-w-0 grid-cols-1 items-stretch gap-4 lg:grid-cols-2 lg:gap-6">
       <Section icon={User} title="Profile">
         <SettingRow label="Name" description={user?.email}>
           <input
             defaultValue={user?.full_name || ""}
-            className="bg-surface-2 border border-border rounded px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-accent w-48"
+            className="bg-surface-2 border border-border rounded px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-accent w-full min-w-0 2xl:w-48"
           />
         </SettingRow>
         <SettingRow label="Email">
-          <span className="text-sm text-muted">{user?.email}</span>
+          <span className="block break-all text-sm text-slate-400">{user?.email}</span>
         </SettingRow>
         <SettingRow label="Plan">
           <span className="text-xs bg-accent/10 text-accent px-2 py-0.5 rounded-full capitalize font-medium">
@@ -158,20 +160,20 @@ export default function SettingsPage() {
         <button
           onClick={handleUploadClick}
           disabled={uploading}
-          className="w-full mt-3 flex items-center justify-center gap-2 text-sm text-accent border border-accent/30 rounded-lg py-2 hover:bg-accent/10 transition-colors disabled:opacity-50"
+          className="w-full mt-3 flex items-center justify-center gap-2 px-3 text-sm text-accent border border-accent/30 rounded-lg py-2 hover:bg-accent/10 transition-colors disabled:opacity-50"
         >
           {uploading ? (
             <Loader2 size={15} className="animate-spin" />
           ) : (
             <Upload size={15} />
           )}
-          {uploading ? "Uploading..." : "Upload Resume (PDF or Word, max 5MB)"}
+          <span className="min-w-0">{uploading ? "Uploading..." : "Upload Resume (PDF or Word, max 5MB)"}</span>
         </button>
       </Section>
 
       <Section icon={Mic} title="Audio">
         <SettingRow label="Microphone" description="Select your input device">
-          <select className="bg-surface-2 border border-border rounded px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-accent">
+          <select className="w-full min-w-0 max-w-full bg-surface-2 border border-border rounded px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-accent">
             <option>Default Microphone</option>
           </select>
         </SettingRow>
@@ -179,7 +181,7 @@ export default function SettingsPage() {
           label="Capture System Audio"
           description="Listen to meeting audio on Windows desktop. Other computer sounds may also be captured."
         >
-          <label className="relative inline-flex items-center cursor-pointer">
+          <label className="relative inline-flex shrink-0 items-center cursor-pointer">
             <input
               type="checkbox"
               className="sr-only peer"
@@ -193,7 +195,7 @@ export default function SettingsPage() {
           label="Listen to My Microphone"
           description="Off by default: listen to meeting audio only. Enable to also transcribe your microphone. Restart listening after changes."
         >
-          <label className="relative inline-flex items-center cursor-pointer">
+          <label className="relative inline-flex shrink-0 items-center cursor-pointer">
             <input
               type="checkbox"
               className="sr-only peer"
@@ -207,14 +209,14 @@ export default function SettingsPage() {
 
       <Section icon={Cpu} title="AI Provider">
         <SettingRow label="Preferred LLM" description="Pro plan required for GPT-4o">
-          <select className="bg-surface-2 border border-border rounded px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-accent">
+          <select className="w-full min-w-0 max-w-full bg-surface-2 border border-border rounded px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-accent">
             <option value="auto">Auto (recommended)</option>
             <option value="openai">GPT-4o (Pro)</option>
             <option value="gemini">Gemini Pro</option>
           </select>
         </SettingRow>
         <SettingRow label="Response Style">
-          <select className="bg-surface-2 border border-border rounded px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-accent">
+          <select className="w-full min-w-0 max-w-full bg-surface-2 border border-border rounded px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-accent">
             <option>Coaching (detailed)</option>
             <option>Concise (bullets)</option>
           </select>
@@ -223,7 +225,7 @@ export default function SettingsPage() {
 
       <Section icon={Shield} title="Privacy">
         <SettingRow label="Data Retention" description="Transcripts are retained for 90 days by default">
-          <select className="bg-surface-2 border border-border rounded px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-accent">
+          <select className="w-full min-w-0 max-w-full bg-surface-2 border border-border rounded px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-accent">
             <option>90 days</option>
             <option>30 days</option>
             <option>7 days</option>
@@ -236,9 +238,13 @@ export default function SettingsPage() {
         </SettingRow>
       </Section>
 
-      <button className="w-full py-2.5 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors">
+      </div>
+
+      <div className="mt-6 flex justify-end border-t border-border pt-6">
+      <button className="w-full sm:w-auto sm:min-w-[180px] px-6 py-3 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors">
         Save Settings
       </button>
+      </div>
     </div>
   );
 }

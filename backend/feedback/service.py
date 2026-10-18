@@ -36,6 +36,16 @@ class FeedbackService:
         if not session:
             raise ValueError(f"Session {session_id} not found")
 
+        # Guided practice uses validated candidate-only scores, including retries
+        # through the existing feedback endpoint. Never overwrite them with defaults.
+        practice_turn = await self.db.scalar(select(AIResponse.id).where(
+            AIResponse.session_id == session.id,
+            AIResponse.response_type == "practice_turn").limit(1))
+        if session.mode == "practice" and practice_turn:
+            from backend.sessions.practice import generate_review
+            user = await self.db.scalar(select(User).where(User.id == session.user_id))
+            return await generate_review(self.db, session, user)
+
         transcripts_result = await self.db.execute(
             select(Transcript).where(Transcript.session_id == session_id).order_by(Transcript.created_at)
         )

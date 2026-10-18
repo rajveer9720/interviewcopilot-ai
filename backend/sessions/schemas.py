@@ -1,6 +1,6 @@
 """Sessions domain — Pydantic schemas."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 from uuid import UUID
 from typing import Literal
@@ -58,3 +58,9 @@ class AIResponseSchema(BaseModel):
     cost_usd: float | None
     created_at: datetime
 
+
+
+class PracticeAction(BaseModel):
+    action: Literal["start", "answer", "next"]
+    question_id: UUID | None = None
+    answer: str = Field(default="", max_length=8000)

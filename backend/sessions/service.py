@@ -58,6 +58,10 @@ class SessionService:
 
     async def end_session(self, session_id: str, user_id: str) -> Session:
         session = await self.get_session(session_id, user_id)
+        session = await self.db.scalar(select(Session).where(
+            Session.id == session.id).with_for_update().execution_options(populate_existing=True))
+        if session.status == "completed":
+            return session
         now = datetime.now(timezone.utc)
         session.status = "completed"
         session.ended_at = now

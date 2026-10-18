@@ -7,6 +7,7 @@ import { useStore } from "./store";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import DashboardPage from "./pages/DashboardPage";
+import MockInterviewPage from "./pages/MockInterviewPage";
 import PracticePage from "./pages/PracticePage";
 import SessionPage from "./pages/SessionPage";
 import FeedbackPage from "./pages/FeedbackPage";
@@ -54,6 +55,7 @@ function AppContent() {
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard"        element={<DashboardPage />} />
             <Route path="practice"         element={<PracticePage />} />
+            <Route path="practice/:id" element={<MockInterviewPage />} />
             <Route path="session/:id"      element={<SessionPage />} />
             <Route path="feedback/:id"     element={<FeedbackPage />} />
             <Route path="settings"         element={<SettingsPage />} />
